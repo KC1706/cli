@@ -116,6 +116,26 @@ func TestWriteSessionFile_RejectsSymlinkedStoreRoot(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "write must not follow a symlinked store root")
 }
 
+func TestSessionStore_WriteFileRejectsMissingStoreBelowSymlink(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	outside := t.TempDir()
+	linkedParent := filepath.Join(base, "linked")
+	if err := os.Symlink(outside, linkedParent); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	storeDir := filepath.Join(linkedParent, "missing-store")
+	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
+	require.NoError(t, err)
+
+	err = store.WriteFile("session.jsonl", []byte("outside\n"), 0o600)
+	require.ErrorIs(t, err, osroot.ErrSymlinkedPath)
+
+	_, err = os.Stat(filepath.Join(outside, "missing-store"))
+	assert.True(t, os.IsNotExist(err), "write must not create a store through a symlinked ancestor")
+}
+
 // Lstat, not Stat: a dangling session log still exists, and both the rewind and
 // resume paths must keep it rather than silently overwrite it.
 func TestSessionStore_ExistsReportsDanglingSymlink(t *testing.T) {

@@ -195,8 +195,8 @@ func openVerifiedStoreRoot(dir string, before os.FileInfo) (*os.Root, error) {
 // component of name. A missing store is allowed because the external agent may
 // create it, provided its nearest existing ancestor can be pinned as a real
 // directory.
-// This is a defense-in-depth preflight for subprocesses that cannot use the
-// store's os.Root; the subprocess still reopens the path.
+// External subprocesses use this as a defense-in-depth preflight and built-in
+// writes use it before creating a missing store.
 func (s *SessionStore) ValidateWritePath(name string) error {
 	for _, component := range strings.Split(filepath.ToSlash(name), "/") {
 		if err := validation.ValidateFileNameComponent(component); err != nil {
@@ -260,6 +260,9 @@ func (s *SessionStore) ReadFile(name string) ([]byte, error) {
 // layouts nest (Gemini keys by project hash, Pi by encoded repo path), so the
 // parents are made here rather than at each call site.
 func (s *SessionStore) WriteFile(name string, data []byte, perm os.FileMode) error {
+	if err := s.ValidateWritePath(name); err != nil {
+		return err
+	}
 	root, err := s.openRootForWrite()
 	if err != nil {
 		return err

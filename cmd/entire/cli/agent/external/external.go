@@ -216,6 +216,12 @@ func (e *Agent) WriteSession(ctx context.Context, session *agent.AgentSession) e
 		if !filepath.IsAbs(sessionRef) && len(sessionRef) > 0 && os.IsPathSeparator(sessionRef[0]) {
 			return fmt.Errorf("write-session: validate session reference: %w: %s is rooted", agent.ErrOutsideSessionStore, sessionRef)
 		}
+		if sessionRef != "" && !filepath.IsAbs(sessionRef) && filepath.VolumeName(sessionRef) == "" {
+			cleaned := filepath.ToSlash(filepath.Clean(filepath.FromSlash(sessionRef)))
+			if cleaned == "." || paths.IsRelativeTraversal(cleaned) {
+				return fmt.Errorf("write-session: validate session reference: %w: %s escapes its relative base", agent.ErrOutsideSessionStore, sessionRef)
+			}
+		}
 		// Relative references are external-agent identifiers and may be opaque
 		// database keys. Only filesystem-shaped references can be preflighted
 		// without changing the external protocol's semantics.
