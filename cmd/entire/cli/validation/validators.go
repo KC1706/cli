@@ -23,6 +23,9 @@ func ValidateFileNameComponent(name string) error {
 	if name == "" {
 		return errors.New("file name component cannot be empty")
 	}
+	if strings.Contains(name, ":") {
+		return fmt.Errorf("invalid file name component %q: contains volume separator", name)
+	}
 	if reason := unsafeFileNameComponentReason(name); reason != "" {
 		return fmt.Errorf("invalid file name component %q: %s", name, reason)
 	}

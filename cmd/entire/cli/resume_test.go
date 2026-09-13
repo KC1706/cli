@@ -36,6 +36,7 @@ const resumeTestStrategy = "manual-commit"
 type recordingResumeAgent struct {
 	sessionDir         string
 	outsidePath        string
+	getSessionDirCalls int
 	resolvedSessionIDs []string
 	writtenSessionIDs  []string
 	writtenSession     *agent.AgentSession
@@ -61,7 +62,10 @@ func (a *recordingResumeAgent) ReassembleTranscript(chunks [][]byte) ([]byte, er
 	return out, nil
 }
 func (a *recordingResumeAgent) GetSessionID(*agent.HookInput) string { return "" }
-func (a *recordingResumeAgent) GetSessionDir(string) (string, error) { return a.sessionDir, nil }
+func (a *recordingResumeAgent) GetSessionDir(string) (string, error) {
+	a.getSessionDirCalls++
+	return a.sessionDir, nil
+}
 func (a *recordingResumeAgent) ResolveSessionFile(sessionDir, sessionID string) string {
 	a.resolvedSessionIDs = append(a.resolvedSessionIDs, sessionID)
 	if sessionID == ".. " && a.outsidePath != "" {
@@ -1115,7 +1119,11 @@ func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenModernSessionsAreUnsafe(
 				outsidePath: outsidePath,
 			}
 			t.Cleanup(agent.SnapshotRegistryForTesting())
-			agent.Register(ag.Name(), func() agent.Agent { return ag })
+			factoryCalls := 0
+			agent.Register(ag.Name(), func() agent.Agent {
+				factoryCalls++
+				return ag
+			})
 
 			createdAt := time.Now()
 			for i, unsafeID := range tt.unsafeIDs {
@@ -1131,6 +1139,8 @@ func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenModernSessionsAreUnsafe(
 			if info.SessionCount != len(tt.unsafeIDs) || len(info.SessionIDs) != len(tt.unsafeIDs) {
 				t.Fatalf("checkpoint metadata sessions: count=%d IDs=%v, want %d", info.SessionCount, info.SessionIDs, len(tt.unsafeIDs))
 			}
+			factoryCalls = 0
+			ag.getSessionDirCalls = 0
 
 			var stdout, stderr bytes.Buffer
 			restored, err := restoreResumeSessions(t.Context(), &stdout, &stderr, info, false)
@@ -1140,6 +1150,9 @@ func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenModernSessionsAreUnsafe(
 			if len(restored) != 0 {
 				t.Fatalf("restored sessions = %#v, want none", restored)
 			}
+			if factoryCalls != 0 || ag.getSessionDirCalls != 0 {
+				t.Fatalf("unsafe IDs triggered agent setup: factories=%d session-dir calls=%d", factoryCalls, ag.getSessionDirCalls)
+			}
 			if len(ag.resolvedSessionIDs) != 0 || len(ag.writtenSessionIDs) != 0 {
 				t.Fatalf("unsafe IDs reached agent: resolved=%v written=%v", ag.resolvedSessionIDs, ag.writtenSessionIDs)
 			}
@@ -1148,6 +1161,9 @@ func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenModernSessionsAreUnsafe(
 			}
 			if _, err := os.Stat(outsidePath); !os.IsNotExist(err) {
 				t.Fatalf("outside file was created; stat error = %v", err)
+			}
+			if _, err := os.Stat(ag.sessionDir); !os.IsNotExist(err) {
+				t.Fatalf("unsafe IDs created the agent session directory; stat error = %v", err)
 			}
 		})
 	}

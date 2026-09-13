@@ -352,6 +352,13 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 			},
 		},
 		{
+			name:    "alternate data stream",
+			wantErr: agent.ErrOutsideSessionStore,
+			sessionRef: func(_ *testing.T, sessionDir, _ string) string {
+				return filepath.Join(sessionDir, "session.jsonl:stream")
+			},
+		},
+		{
 			name:    "missing store with Windows-normalized traversal",
 			wantErr: agent.ErrOutsideSessionStore,
 			sessionRef: func(t *testing.T, sessionDir, _ string) string {

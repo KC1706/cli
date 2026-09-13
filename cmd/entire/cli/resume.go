@@ -901,37 +901,12 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	checkpointID := metadata.CheckpointID
 	sessionID := metadata.SessionID
 
-	// Resolve agent from checkpoint metadata
-	ag, err := strategy.ResolveAgentForResume(metadata.Agent)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve agent: %w", err)
-	}
-
-	// Initialize logging context with agent
-	logCtx := logging.WithAgent(logging.WithComponent(ctx, "resume"), ag.Name())
+	logCtx := logging.WithComponent(ctx, "resume")
 
 	logging.Debug(logCtx, "resume session started",
 		slog.String("checkpoint_id", checkpointID.String()),
 		slog.String("session_id", sessionID),
 	)
-
-	// Get worktree root for session directory lookup
-	repoRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get worktree root: %w", err)
-	}
-
-	sessionDir, err := ag.GetSessionDir(repoRoot)
-	if err != nil {
-		return nil, fmt.Errorf("failed to determine session directory: %w", err)
-	}
-
-	// Create the agent's session directory. This is the one place it is created
-	// from the outside — agent.OpenSessionStore requires it to exist, because a
-	// store for a directory that is not there has nothing to resolve.
-	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
-		return nil, fmt.Errorf("failed to create session directory: %w", err)
-	}
 
 	// Get strategy and restore sessions using full checkpoint data
 	strat := GetStrategy(ctx)
@@ -950,6 +925,14 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	if sessionIDIsSafe && (restoreErr != nil || (len(sessions) == 0 && !isMultiSession)) {
 		// Preserve the single-session fallback for missing logs and older
 		// checkpoints, but never retry an unsafe ID that RestoreLogsOnly skipped.
+		ag, err := strategy.ResolveAgentForResume(metadata.Agent)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve agent: %w", err)
+		}
+		repoRoot, err := paths.WorktreeRoot(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get worktree root: %w", err)
+		}
 		session, ok, err := restoreSingleSession(ctx, w, ag, sessionID, checkpointID, repoRoot, force)
 		if err != nil || !ok {
 			return nil, err

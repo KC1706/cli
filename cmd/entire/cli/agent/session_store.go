@@ -103,7 +103,11 @@ func (s *SessionStore) Dir() string { return s.dir }
 // A directory that does not exist is reported unwrapped so callers can classify
 // it with os.IsNotExist.
 func (s *SessionStore) openRoot() (*os.Root, error) {
-	return os.OpenRoot(s.dir) //nolint:wrapcheck // see doc comment
+	info, err := os.Lstat(s.dir)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // see doc comment
+	}
+	return openVerifiedStoreRoot(s.dir, info)
 }
 
 // openRootForWrite is openRoot with the store directory created first. The
