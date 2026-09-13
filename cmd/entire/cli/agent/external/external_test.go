@@ -391,29 +391,43 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 func TestWriteSession_PreservesOpaqueRelativeReferenceWithMissingStore(t *testing.T) {
 	t.Parallel()
 
-	ea, sessionDir, marker := newWriteRecordingAgent(t)
-	if err := os.Remove(sessionDir); err != nil {
-		t.Fatalf("remove session directory: %v", err)
+	tests := []struct {
+		name       string
+		sessionRef string
+	}{
+		{name: "path-like key", sessionRef: "database/session-key"},
+		{name: "dot component", sessionRef: "tenant/../session-key"},
+		{name: "Windows device basename", sessionRef: "CON"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sessionRef := tt.sessionRef
 
-	const sessionRef = "database/session-key"
-	if err := ea.WriteSession(t.Context(), &agent.AgentSession{
-		RepoPath:   t.TempDir(),
-		SessionRef: sessionRef,
-	}); err != nil {
-		t.Fatalf("WriteSession() error = %v", err)
-	}
+			ea, sessionDir, marker := newWriteRecordingAgent(t)
+			if err := os.Remove(sessionDir); err != nil {
+				t.Fatalf("remove session directory: %v", err)
+			}
 
-	data, err := os.ReadFile(marker)
-	if err != nil {
-		t.Fatalf("read write-session input: %v", err)
-	}
-	var got AgentSessionJSON
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("decode write-session input: %v", err)
-	}
-	if got.SessionRef != sessionRef {
-		t.Errorf("session_ref = %q, want %q", got.SessionRef, sessionRef)
+			if err := ea.WriteSession(t.Context(), &agent.AgentSession{
+				RepoPath:   t.TempDir(),
+				SessionRef: sessionRef,
+			}); err != nil {
+				t.Fatalf("WriteSession() error = %v", err)
+			}
+
+			data, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatalf("read write-session input: %v", err)
+			}
+			var got AgentSessionJSON
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("decode write-session input: %v", err)
+			}
+			if got.SessionRef != sessionRef {
+				t.Errorf("session_ref = %q, want %q", got.SessionRef, sessionRef)
+			}
+		})
 	}
 }
 

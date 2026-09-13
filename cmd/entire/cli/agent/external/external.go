@@ -216,25 +216,30 @@ func (e *Agent) WriteSession(ctx context.Context, session *agent.AgentSession) e
 		if !filepath.IsAbs(sessionRef) && len(sessionRef) > 0 && os.IsPathSeparator(sessionRef[0]) {
 			return fmt.Errorf("write-session: validate session reference: %w: %s is rooted", agent.ErrOutsideSessionStore, sessionRef)
 		}
-		for _, component := range strings.Split(filepath.ToSlash(sessionRef), "/") {
-			if component == "." || component == ".." {
-				return fmt.Errorf("write-session: validate session reference: %w: %s contains a dot path component", agent.ErrOutsideSessionStore, sessionRef)
+		// Relative references are external-agent identifiers and may be opaque
+		// database keys. Only filesystem-shaped references can be preflighted
+		// without changing the external protocol's semantics.
+		if filepath.IsAbs(sessionRef) || filepath.VolumeName(sessionRef) != "" {
+			for _, component := range strings.Split(filepath.ToSlash(sessionRef), "/") {
+				if component == "." || component == ".." {
+					return fmt.Errorf("write-session: validate session reference: %w: %s contains a dot path component", agent.ErrOutsideSessionStore, sessionRef)
+				}
 			}
-		}
-		sessionDir, err := e.getSessionDir(ctx, session.RepoPath)
-		if err != nil {
-			return fmt.Errorf("write-session: open session store: %w", err)
-		}
-		store, err := agent.OpenSessionStoreAt(e, sessionDir)
-		if err != nil {
-			return fmt.Errorf("write-session: open session store: %w", err)
-		}
-		name, err := store.Name(sessionRef)
-		if err != nil {
-			return fmt.Errorf("write-session: validate session reference: %w", err)
-		}
-		if err := store.ValidateWritePath(name); err != nil {
-			return fmt.Errorf("write-session: validate session reference: %w", err)
+			sessionDir, err := e.getSessionDir(ctx, session.RepoPath)
+			if err != nil {
+				return fmt.Errorf("write-session: open session store: %w", err)
+			}
+			store, err := agent.OpenSessionStoreAt(e, sessionDir)
+			if err != nil {
+				return fmt.Errorf("write-session: open session store: %w", err)
+			}
+			name, err := store.Name(sessionRef)
+			if err != nil {
+				return fmt.Errorf("write-session: validate session reference: %w", err)
+			}
+			if err := store.ValidateWritePath(name); err != nil {
+				return fmt.Errorf("write-session: validate session reference: %w", err)
+			}
 		}
 	}
 	_, err = e.run(ctx, data, "write-session")
