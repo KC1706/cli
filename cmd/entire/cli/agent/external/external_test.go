@@ -237,6 +237,51 @@ func TestNew_Valid(t *testing.T) {
 	}
 }
 
+func TestWriteSession_RejectsOutsideStoreBeforeSubprocess(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	tests := []struct {
+		name     string
+		relative bool
+	}{
+		{name: "absolute", relative: false},
+		{name: "relative", relative: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			script := strings.Replace(mockInfoScript(validInfoJSON),
+				`echo '{"session_dir": "/tmp/sessions"}'`,
+				`printf '{"session_dir":"%s/sessions"}\n' "$(dirname "$0")"`, 1)
+			script = strings.Replace(script,
+				"  write-session)\n    exit 0\n    ;;",
+				"  write-session)\n    cat > \"$(dirname \"$0\")/write-session-input\"\n    ;;", 1)
+			binPath := testBinaryDir(t, script)
+			ea := newExternalAgent(t, binPath)
+			marker := filepath.Join(filepath.Dir(binPath), "write-session-input")
+			sessionRef := filepath.Join(filepath.Dir(binPath), "outside.jsonl")
+			if tt.relative {
+				sessionRef = "outside.jsonl"
+			}
+			err := ea.WriteSession(t.Context(), &agent.AgentSession{
+				RepoPath:   t.TempDir(),
+				SessionRef: sessionRef,
+			})
+			if !errors.Is(err, agent.ErrOutsideSessionStore) {
+				t.Fatalf("WriteSession() error = %v, want ErrOutsideSessionStore", err)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("write-session subprocess was invoked; marker stat error = %v", err)
+			}
+		})
+	}
+}
+
 func TestNew_WrongProtocolVersion(t *testing.T) {
 	t.Parallel()
 

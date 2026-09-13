@@ -161,7 +161,11 @@ func (e *Agent) GetSessionID(input *agent.HookInput) string {
 }
 
 func (e *Agent) GetSessionDir(repoPath string) (string, error) {
-	stdout, err := e.run(context.Background(), nil, "get-session-dir", "--repo-path", repoPath)
+	return e.getSessionDir(context.Background(), repoPath)
+}
+
+func (e *Agent) getSessionDir(ctx context.Context, repoPath string) (string, error) {
+	stdout, err := e.run(ctx, nil, "get-session-dir", "--repo-path", repoPath)
 	if err != nil {
 		return "", fmt.Errorf("get-session-dir: %w", err)
 	}
@@ -205,6 +209,22 @@ func (e *Agent) WriteSession(ctx context.Context, session *agent.AgentSession) e
 	data, err := marshalAgentSession(session)
 	if err != nil {
 		return fmt.Errorf("write-session: marshal: %w", err)
+	}
+	if session.RepoPath != "" {
+		if !filepath.IsAbs(session.SessionRef) {
+			return fmt.Errorf("write-session: validate session reference: %w: %s is not absolute", agent.ErrOutsideSessionStore, session.SessionRef)
+		}
+		sessionDir, err := e.getSessionDir(ctx, session.RepoPath)
+		if err != nil {
+			return fmt.Errorf("write-session: open session store: %w", err)
+		}
+		store, err := agent.OpenSessionStoreAt(e, sessionDir)
+		if err != nil {
+			return fmt.Errorf("write-session: open session store: %w", err)
+		}
+		if _, err := store.Name(session.SessionRef); err != nil {
+			return fmt.Errorf("write-session: validate session reference: %w", err)
+		}
 	}
 	_, err = e.run(ctx, data, "write-session")
 	if err != nil {
