@@ -1092,49 +1092,64 @@ func TestRestoreLogsOnly_SkipsUnsafeCheckpointSessionIDBeforeAgentCalls(t *testi
 	}
 }
 
-func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenAllSessionsAreUnsafe(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
-	cleanupResumeTestRepo(t, repo, tmpDir)
-	outsidePath := filepath.Join(tmpDir, "transcript.jsonl")
-	ag := &recordingResumeAgent{
-		sessionDir:  filepath.Join(tmpDir, "sessions"),
-		outsidePath: outsidePath,
-	}
-	t.Cleanup(agent.SnapshotRegistryForTesting())
-	agent.Register(ag.Name(), func() agent.Agent { return ag })
-
-	cpID := id.MustCheckpointID("ffffffffffff")
-	createdAt := time.Now()
-	writeCommittedResumeCheckpointWithAgent(t, repo, cpID, "safe-session-1", createdAt, ag.Type())
-	writeCommittedResumeCheckpointWithAgent(t, repo, cpID, "safe-session-2", createdAt.Add(time.Second), ag.Type())
-	tamperResumeCheckpointSessionID(t, repo, cpID, 0, ".. ")
-	tamperResumeCheckpointSessionID(t, repo, cpID, 1, " ..")
-
-	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
-	info, err := readCheckpointInfoFromStore(t.Context(), store, cpID)
-	if err != nil {
-		t.Fatalf("read checkpoint metadata: %v", err)
+func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenModernSessionsAreUnsafe(t *testing.T) {
+	tests := []struct {
+		name       string
+		unsafeIDs  []string
+		checkpoint id.CheckpointID
+	}{
+		{name: "single session", unsafeIDs: []string{".. "}, checkpoint: id.MustCheckpointID("fefefefefefe")},
+		{name: "multiple sessions", unsafeIDs: []string{".. ", " .."}, checkpoint: id.MustCheckpointID("ffffffffffff")},
 	}
 
-	var stdout, stderr bytes.Buffer
-	restored, err := restoreResumeSessions(t.Context(), &stdout, &stderr, info, false)
-	if err != nil {
-		t.Fatalf("restoreResumeSessions() error = %v", err)
-	}
-	if len(restored) != 0 {
-		t.Fatalf("restored sessions = %#v, want none", restored)
-	}
-	if len(ag.resolvedSessionIDs) != 0 || len(ag.writtenSessionIDs) != 0 {
-		t.Fatalf("unsafe IDs reached agent: resolved=%v written=%v", ag.resolvedSessionIDs, ag.writtenSessionIDs)
-	}
-	if got := strings.Count(stderr.String(), "unsafe session ID"); got != 2 {
-		t.Fatalf("unsafe session warnings = %d, want 2\nstderr: %s", got, stderr.String())
-	}
-	if _, err := os.Stat(outsidePath); !os.IsNotExist(err) {
-		t.Fatalf("outside file was created; stat error = %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			t.Chdir(tmpDir)
+
+			repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
+			cleanupResumeTestRepo(t, repo, tmpDir)
+			outsidePath := filepath.Join(tmpDir, "transcript.jsonl")
+			ag := &recordingResumeAgent{
+				sessionDir:  filepath.Join(tmpDir, "sessions"),
+				outsidePath: outsidePath,
+			}
+			t.Cleanup(agent.SnapshotRegistryForTesting())
+			agent.Register(ag.Name(), func() agent.Agent { return ag })
+
+			createdAt := time.Now()
+			for i, unsafeID := range tt.unsafeIDs {
+				writeCommittedResumeCheckpointWithAgent(t, repo, tt.checkpoint, fmt.Sprintf("safe-session-%d", i), createdAt.Add(time.Duration(i)*time.Second), ag.Type())
+				tamperResumeCheckpointSessionID(t, repo, tt.checkpoint, i, unsafeID)
+			}
+
+			store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
+			info, err := readCheckpointInfoFromStore(t.Context(), store, tt.checkpoint)
+			if err != nil {
+				t.Fatalf("read checkpoint metadata: %v", err)
+			}
+			if info.SessionCount != len(tt.unsafeIDs) || len(info.SessionIDs) != len(tt.unsafeIDs) {
+				t.Fatalf("checkpoint metadata sessions: count=%d IDs=%v, want %d", info.SessionCount, info.SessionIDs, len(tt.unsafeIDs))
+			}
+
+			var stdout, stderr bytes.Buffer
+			restored, err := restoreResumeSessions(t.Context(), &stdout, &stderr, info, false)
+			if err != nil {
+				t.Fatalf("restoreResumeSessions() error = %v", err)
+			}
+			if len(restored) != 0 {
+				t.Fatalf("restored sessions = %#v, want none", restored)
+			}
+			if len(ag.resolvedSessionIDs) != 0 || len(ag.writtenSessionIDs) != 0 {
+				t.Fatalf("unsafe IDs reached agent: resolved=%v written=%v", ag.resolvedSessionIDs, ag.writtenSessionIDs)
+			}
+			if got := strings.Count(stderr.String(), "unsafe session ID"); got != len(tt.unsafeIDs) {
+				t.Fatalf("unsafe session warnings = %d, want %d\nstderr: %s", got, len(tt.unsafeIDs), stderr.String())
+			}
+			if _, err := os.Stat(outsidePath); !os.IsNotExist(err) {
+				t.Fatalf("outside file was created; stat error = %v", err)
+			}
+		})
 	}
 }
 

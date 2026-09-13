@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
 
 // SessionStore is one agent's own session directory, held as an *os.Root.
@@ -192,6 +194,12 @@ func openVerifiedStoreRoot(dir string, before os.FileInfo) (*os.Root, error) {
 // This is a defense-in-depth preflight for subprocesses that cannot use the
 // store's os.Root; the subprocess still reopens the path.
 func (s *SessionStore) ValidateWritePath(name string) error {
+	for _, component := range strings.Split(filepath.ToSlash(name), "/") {
+		if err := validation.ValidateFileNameComponent(component); err != nil {
+			return fmt.Errorf("inspect session write path: %w: %w", ErrOutsideSessionStore, err)
+		}
+	}
+
 	storeInfo, err := os.Lstat(s.dir)
 	if err != nil {
 		if !os.IsNotExist(err) {

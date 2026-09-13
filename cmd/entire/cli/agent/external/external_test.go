@@ -351,6 +351,17 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 				return linked + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "session.jsonl"
 			},
 		},
+		{
+			name:    "missing store with Windows-normalized traversal",
+			wantErr: agent.ErrOutsideSessionStore,
+			sessionRef: func(t *testing.T, sessionDir, _ string) string {
+				t.Helper()
+				if err := os.Remove(sessionDir); err != nil {
+					t.Fatalf("remove session directory: %v", err)
+				}
+				return filepath.Join(sessionDir, ".. ", "session.jsonl")
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

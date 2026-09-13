@@ -118,6 +118,26 @@ func TestSessionStore_ValidateWritePathAllowsMissingStore(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "validation must not create the missing store")
 }
 
+func TestSessionStore_ValidateWritePathRejectsUnsafeNameWithMissingStore(t *testing.T) {
+	t.Parallel()
+
+	storeDir := filepath.Join(t.TempDir(), "missing-store")
+	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
+	require.NoError(t, err)
+
+	for _, name := range []string{
+		filepath.Join(".. ", "session.jsonl"),
+		filepath.Join("session.", "session.jsonl"),
+		filepath.Join("bad\x00name", "session.jsonl"),
+		filepath.Join("CON", "session.jsonl"),
+		filepath.Join("nul.jsonl", "session.jsonl"),
+	} {
+		require.Error(t, store.ValidateWritePath(name), name)
+	}
+	_, err = os.Stat(storeDir)
+	assert.True(t, os.IsNotExist(err), "validation must not create the missing store")
+}
+
 func TestSessionStore_ValidateWritePathRejectsMissingStoreBelowSymlink(t *testing.T) {
 	t.Parallel()
 
