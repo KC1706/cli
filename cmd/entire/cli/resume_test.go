@@ -1092,6 +1092,84 @@ func TestRestoreLogsOnly_SkipsUnsafeCheckpointSessionIDBeforeAgentCalls(t *testi
 	}
 }
 
+func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenAllSessionsAreUnsafe(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
+	cleanupResumeTestRepo(t, repo, tmpDir)
+	outsidePath := filepath.Join(tmpDir, "transcript.jsonl")
+	ag := &recordingResumeAgent{
+		sessionDir:  filepath.Join(tmpDir, "sessions"),
+		outsidePath: outsidePath,
+	}
+	t.Cleanup(agent.SnapshotRegistryForTesting())
+	agent.Register(ag.Name(), func() agent.Agent { return ag })
+
+	cpID := id.MustCheckpointID("ffffffffffff")
+	createdAt := time.Now()
+	writeCommittedResumeCheckpointWithAgent(t, repo, cpID, "safe-session-1", createdAt, ag.Type())
+	writeCommittedResumeCheckpointWithAgent(t, repo, cpID, "safe-session-2", createdAt.Add(time.Second), ag.Type())
+	tamperResumeCheckpointSessionID(t, repo, cpID, 0, ".. ")
+	tamperResumeCheckpointSessionID(t, repo, cpID, 1, " ..")
+
+	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
+	info, err := readCheckpointInfoFromStore(t.Context(), store, cpID)
+	if err != nil {
+		t.Fatalf("read checkpoint metadata: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	restored, err := restoreResumeSessions(t.Context(), &stdout, &stderr, info, false)
+	if err != nil {
+		t.Fatalf("restoreResumeSessions() error = %v", err)
+	}
+	if len(restored) != 0 {
+		t.Fatalf("restored sessions = %#v, want none", restored)
+	}
+	if len(ag.resolvedSessionIDs) != 0 || len(ag.writtenSessionIDs) != 0 {
+		t.Fatalf("unsafe IDs reached agent: resolved=%v written=%v", ag.resolvedSessionIDs, ag.writtenSessionIDs)
+	}
+	if got := strings.Count(stderr.String(), "unsafe session ID"); got != 2 {
+		t.Fatalf("unsafe session warnings = %d, want 2\nstderr: %s", got, stderr.String())
+	}
+	if _, err := os.Stat(outsidePath); !os.IsNotExist(err) {
+		t.Fatalf("outside file was created; stat error = %v", err)
+	}
+}
+
+func TestRestoreResumeSessions_PreservesLegacySingleSessionFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
+	cleanupResumeTestRepo(t, repo, tmpDir)
+	ag := &recordingResumeAgent{sessionDir: filepath.Join(tmpDir, "sessions")}
+	t.Cleanup(agent.SnapshotRegistryForTesting())
+	agent.Register(ag.Name(), func() agent.Agent { return ag })
+
+	cpID := id.MustCheckpointID("abababababab")
+	const sessionID = "legacy-session"
+	writeCommittedResumeCheckpointWithAgent(t, repo, cpID, sessionID, time.Now(), "")
+	metadata := &strategy.CheckpointInfo{
+		CheckpointID: cpID,
+		SessionID:    sessionID,
+		Agent:        ag.Type(),
+	}
+
+	var stdout, stderr bytes.Buffer
+	restored, err := restoreResumeSessions(t.Context(), &stdout, &stderr, metadata, true)
+	if err != nil {
+		t.Fatalf("restoreResumeSessions() error = %v", err)
+	}
+	if len(restored) != 1 || restored[0].SessionID != sessionID {
+		t.Fatalf("restored sessions = %#v, want legacy session", restored)
+	}
+	if len(ag.writtenSessionIDs) != 1 || ag.writtenSessionIDs[0] != sessionID {
+		t.Fatalf("written sessions = %v, want %q", ag.writtenSessionIDs, sessionID)
+	}
+}
+
 func TestRestoreSingleSession_UsesV1TranscriptAndReturnsRestoredSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)

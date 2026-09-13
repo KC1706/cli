@@ -160,16 +160,14 @@ func (s *SessionStore) Name(p string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// ValidateWritePath rejects a symlink in any existing component of name. A
-// missing component is allowed because the external agent may create it while
-// writing the session. This is a defense-in-depth preflight for subprocesses
-// that cannot use the store's os.Root; the subprocess still reopens the path.
+// ValidateWritePath rejects a symlink in any existing component of name. The
+// store itself must exist so it can be opened as the trusted root; a missing
+// component beneath it is allowed because the external agent may create it.
+// This is a defense-in-depth preflight for subprocesses that cannot use the
+// store's os.Root; the subprocess still reopens the path.
 func (s *SessionStore) ValidateWritePath(name string) error {
 	root, err := s.openRoot()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return fmt.Errorf("inspect session write path: %w", err)
 	}
 	defer root.Close()

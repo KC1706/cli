@@ -105,6 +105,37 @@ func TestSessionStore_ExistsReportsDanglingSymlink(t *testing.T) {
 	assert.True(t, store.Exists("a.jsonl"))
 }
 
+func TestSessionStore_ValidateWritePathRejectsMissingStore(t *testing.T) {
+	t.Parallel()
+
+	storeDir := filepath.Join(t.TempDir(), "missing-store")
+	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
+	require.NoError(t, err)
+
+	require.Error(t, store.ValidateWritePath("session.jsonl"))
+	_, err = os.Stat(storeDir)
+	assert.True(t, os.IsNotExist(err), "validation must not create the missing store")
+}
+
+func TestSessionStore_ValidateWritePathRejectsMissingStoreBelowSymlink(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	outside := t.TempDir()
+	linkedParent := filepath.Join(base, "linked")
+	if err := os.Symlink(outside, linkedParent); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	storeDir := filepath.Join(linkedParent, "missing-store")
+	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
+	require.NoError(t, err)
+
+	require.Error(t, store.ValidateWritePath("session.jsonl"))
+	_, err = os.Stat(filepath.Join(outside, "missing-store"))
+	assert.True(t, os.IsNotExist(err), "validation must not create the store through a symlink")
+}
+
 func TestWriteSessionFile_WritesThroughTheStore(t *testing.T) {
 	t.Parallel()
 

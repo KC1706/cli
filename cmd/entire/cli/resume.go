@@ -944,8 +944,11 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	}
 
 	sessions, restoreErr := strat.RestoreLogsOnly(ctx, w, errW, point, force)
-	if restoreErr != nil || len(sessions) == 0 {
-		// Fall back to single-session restore (e.g., old checkpoints without agent metadata)
+	isMultiSession := metadata.SessionCount > 1 || len(metadata.SessionIDs) > 1
+	if restoreErr != nil || (len(sessions) == 0 && !isMultiSession) {
+		// Keep the legacy single-session fallback for old checkpoints without
+		// per-session agent metadata. An empty multi-session result means every
+		// entry was skipped and must not retry one of those entries here.
 		session, ok, err := restoreSingleSession(ctx, w, ag, sessionID, checkpointID, repoRoot, force)
 		if err != nil || !ok {
 			return nil, err
