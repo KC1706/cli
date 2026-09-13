@@ -150,12 +150,33 @@ const validInfoJSON = `{
 
 func newWriteRecordingAgent(t *testing.T) (*Agent, string, string) {
 	t.Helper()
-	script := strings.Replace(mockInfoScript(validInfoJSON),
-		`echo '{"session_dir": "/tmp/sessions"}'`,
-		`printf '{"session_dir":"%s/sessions"}\n' "$(dirname "$0")"`, 1)
-	script = strings.Replace(script,
-		"  write-session)\n    exit 0\n    ;;",
-		"  write-session)\n    cat > \"$(dirname \"$0\")/write-session-input\"\n    ;;", 1)
+	var script string
+	if runtime.GOOS == osWindows {
+		script = strings.ReplaceAll(`@echo off
+if "%1"=="info" goto info
+if "%1"=="get-session-dir" goto sessiondir
+if "%1"=="write-session" goto writesession
+exit /b 1
+:info
+echo {"protocol_version":1,"name":"test","type":"Test Agent","description":"A test agent"}
+exit /b 0
+:sessiondir
+set "session_dir=%~dp0sessions"
+set "session_dir=%session_dir:\=\\%"
+echo {"session_dir":"%session_dir%"}
+exit /b 0
+:writesession
+more > "%~dp0write-session-input"
+exit /b 0
+`, "\n", "\r\n")
+	} else {
+		script = strings.Replace(mockInfoScript(validInfoJSON),
+			`echo '{"session_dir": "/tmp/sessions"}'`,
+			`printf '{"session_dir":"%s/sessions"}\n' "$(dirname "$0")"`, 1)
+		script = strings.Replace(script,
+			"  write-session)\n    exit 0\n    ;;",
+			"  write-session)\n    cat > \"$(dirname \"$0\")/write-session-input\"\n    ;;", 1)
+	}
 	binPath := testBinaryDir(t, script)
 	sessionDir := filepath.Join(filepath.Dir(binPath), "sessions")
 	if err := os.Mkdir(sessionDir, 0o750); err != nil {
@@ -258,10 +279,6 @@ func TestNew_Valid(t *testing.T) {
 func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("sh not available")
-	}
-
 	tests := []struct {
 		name       string
 		wantErr    error
@@ -348,10 +365,6 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 
 func TestWriteSession_PreservesOpaqueRelativeReference(t *testing.T) {
 	t.Parallel()
-
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("sh not available")
-	}
 
 	ea, _, marker := newWriteRecordingAgent(t)
 
