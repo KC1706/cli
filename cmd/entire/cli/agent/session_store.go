@@ -160,13 +160,62 @@ func (s *SessionStore) Name(p string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// ValidateWritePath rejects a symlink in any existing component of name. The
-// store itself must exist so it can be opened as the trusted root; a missing
-// component beneath it is allowed because the external agent may create it.
+// openVerifiedStoreRoot rejects a link at dir itself and confirms that
+// os.OpenRoot pinned the directory observed by Lstat. Ancestor aliases are
+// already part of the agent-reported store location.
+func openVerifiedStoreRoot(dir string, before os.FileInfo) (*os.Root, error) {
+	if before.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s: %w", dir, osroot.ErrSymlinkedPath)
+	}
+	if !before.IsDir() {
+		return nil, fmt.Errorf("%s: %w", dir, osroot.ErrWalkRootNotDirectory)
+	}
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // caller adds the operation context
+	}
+	opened, openErr := root.Stat(".")
+	after, lstatErr := os.Lstat(dir)
+	if openErr != nil || lstatErr != nil || after.Mode()&os.ModeSymlink != 0 ||
+		!after.IsDir() || !os.SameFile(before, opened) || !os.SameFile(after, opened) {
+		_ = root.Close()
+		return nil, fmt.Errorf("%s changed while it was being opened: %w", dir, osroot.ErrReplacedDuringOpen)
+	}
+	return root, nil
+}
+
+// ValidateWritePath rejects a symlink at the store root or in any existing
+// component of name. A missing store is allowed because the external agent may
+// create it, provided its nearest existing ancestor can be pinned as a real
+// directory.
 // This is a defense-in-depth preflight for subprocesses that cannot use the
 // store's os.Root; the subprocess still reopens the path.
 func (s *SessionStore) ValidateWritePath(name string) error {
-	root, err := s.openRoot()
+	storeInfo, err := os.Lstat(s.dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect session write path: %w", err)
+		}
+		// Stop at the first existing ancestor. Walking farther would reject
+		// normal platform aliases such as macOS /var even though the nearest
+		// directory from which the store will be created is real.
+		for ancestor := filepath.Dir(s.dir); ; ancestor = filepath.Dir(ancestor) {
+			ancestorInfo, ancestorErr := os.Lstat(ancestor)
+			if ancestorErr == nil {
+				ancestorRoot, openErr := openVerifiedStoreRoot(ancestor, ancestorInfo)
+				if openErr != nil {
+					return fmt.Errorf("inspect session write path: %w", openErr)
+				}
+				_ = ancestorRoot.Close()
+				return nil
+			}
+			if !os.IsNotExist(ancestorErr) || filepath.Dir(ancestor) == ancestor {
+				return fmt.Errorf("inspect session write path: %w", ancestorErr)
+			}
+		}
+	}
+	root, err := openVerifiedStoreRoot(s.dir, storeInfo)
 	if err != nil {
 		return fmt.Errorf("inspect session write path: %w", err)
 	}
