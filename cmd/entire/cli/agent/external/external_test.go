@@ -3,6 +3,7 @@ package external
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -147,6 +148,22 @@ const validInfoJSON = `{
   }
 }`
 
+func newWriteRecordingAgent(t *testing.T) (*Agent, string, string) {
+	t.Helper()
+	script := strings.Replace(mockInfoScript(validInfoJSON),
+		`echo '{"session_dir": "/tmp/sessions"}'`,
+		`printf '{"session_dir":"%s/sessions"}\n' "$(dirname "$0")"`, 1)
+	script = strings.Replace(script,
+		"  write-session)\n    exit 0\n    ;;",
+		"  write-session)\n    cat > \"$(dirname \"$0\")/write-session-input\"\n    ;;", 1)
+	binPath := testBinaryDir(t, script)
+	sessionDir := filepath.Join(filepath.Dir(binPath), "sessions")
+	if err := os.Mkdir(sessionDir, 0o750); err != nil {
+		t.Fatalf("create session directory: %v", err)
+	}
+	return newExternalAgent(t, binPath), sessionDir, filepath.Join(filepath.Dir(binPath), "write-session-input")
+}
+
 func TestRun_AppliesTimeoutWhenNoDeadline(t *testing.T) {
 	// Not parallel: mutates package-level defaultRunTimeout.
 	if _, err := exec.LookPath("sh"); err != nil {
@@ -258,10 +275,10 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 			},
 		},
 		{
-			name:    "relative",
+			name:    "rooted path",
 			wantErr: agent.ErrOutsideSessionStore,
 			sessionRef: func(_ *testing.T, _, _ string) string {
-				return "session.jsonl"
+				return string(os.PathSeparator) + "outside.jsonl"
 			},
 		},
 		{
@@ -308,19 +325,7 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			script := strings.Replace(mockInfoScript(validInfoJSON),
-				`echo '{"session_dir": "/tmp/sessions"}'`,
-				`printf '{"session_dir":"%s/sessions"}\n' "$(dirname "$0")"`, 1)
-			script = strings.Replace(script,
-				"  write-session)\n    exit 0\n    ;;",
-				"  write-session)\n    cat > \"$(dirname \"$0\")/write-session-input\"\n    ;;", 1)
-			binPath := testBinaryDir(t, script)
-			ea := newExternalAgent(t, binPath)
-			binDir := filepath.Dir(binPath)
-			sessionDir := filepath.Join(binDir, "sessions")
-			if err := os.MkdirAll(sessionDir, 0o750); err != nil {
-				t.Fatalf("create session directory: %v", err)
-			}
+			ea, sessionDir, marker := newWriteRecordingAgent(t)
 			outsideDir := t.TempDir()
 			sessionRef := tt.sessionRef(t, sessionDir, outsideDir)
 
@@ -331,7 +336,6 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("WriteSession() error = %v, want %v", err, tt.wantErr)
 			}
-			marker := filepath.Join(binDir, "write-session-input")
 			if _, err := os.Stat(marker); !os.IsNotExist(err) {
 				t.Fatalf("write-session subprocess was invoked; marker stat error = %v", err)
 			}
@@ -339,6 +343,36 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 				t.Fatalf("outside file was created; stat error = %v", err)
 			}
 		})
+	}
+}
+
+func TestWriteSession_PreservesOpaqueRelativeReference(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	ea, _, marker := newWriteRecordingAgent(t)
+
+	const sessionRef = "database/session-key"
+	if err := ea.WriteSession(t.Context(), &agent.AgentSession{
+		RepoPath:   t.TempDir(),
+		SessionRef: sessionRef,
+	}); err != nil {
+		t.Fatalf("WriteSession() error = %v", err)
+	}
+
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read write-session input: %v", err)
+	}
+	var got AgentSessionJSON
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode write-session input: %v", err)
+	}
+	if got.SessionRef != sessionRef {
+		t.Errorf("session_ref = %q, want %q", got.SessionRef, sessionRef)
 	}
 }
 
