@@ -1096,7 +1096,7 @@ func TestRestoreLogsOnly_SkipsUnsafeCheckpointSessionIDBeforeAgentCalls(t *testi
 	}
 }
 
-func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenModernSessionsAreUnsafe(t *testing.T) {
+func TestRestoreResumeSessions_RejectsUnsafeModernSessionsWithoutLegacyFallback(t *testing.T) {
 	tests := []struct {
 		name       string
 		unsafeIDs  []string
@@ -1144,8 +1144,11 @@ func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenModernSessionsAreUnsafe(
 
 			var stdout, stderr bytes.Buffer
 			restored, err := restoreResumeSessions(t.Context(), &stdout, &stderr, info, false)
-			if err != nil {
-				t.Fatalf("restoreResumeSessions() error = %v", err)
+			if err == nil {
+				t.Fatal("restoreResumeSessions() error = nil, want unsafe session ID rejection")
+			}
+			if !strings.Contains(err.Error(), "unsafe checkpoint session ID") {
+				t.Fatalf("restoreResumeSessions() error = %v, want unsafe checkpoint session ID rejection", err)
 			}
 			if len(restored) != 0 {
 				t.Fatalf("restored sessions = %#v, want none", restored)

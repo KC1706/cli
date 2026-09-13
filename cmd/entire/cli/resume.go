@@ -921,8 +921,8 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 
 	sessions, restoreErr := strat.RestoreLogsOnly(ctx, w, errW, point, force)
 	isMultiSession := metadata.SessionCount > 1 || len(metadata.SessionIDs) > 1
-	sessionIDIsSafe := validation.ValidateSessionID(sessionID) == nil
-	if sessionIDIsSafe && (restoreErr != nil || (len(sessions) == 0 && !isMultiSession)) {
+	sessionIDErr := validation.ValidateSessionID(sessionID)
+	if sessionIDErr == nil && (restoreErr != nil || (len(sessions) == 0 && !isMultiSession)) {
 		// Preserve the single-session fallback for missing logs and older
 		// checkpoints, but never retry an unsafe ID that RestoreLogsOnly skipped.
 		ag, err := strategy.ResolveAgentForResume(metadata.Agent)
@@ -941,6 +941,9 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	}
 	if restoreErr != nil {
 		return nil, fmt.Errorf("failed to restore session logs: %w", restoreErr)
+	}
+	if len(sessions) == 0 && sessionIDErr != nil {
+		return nil, fmt.Errorf("unsafe checkpoint session ID %q: %w", sessionID, sessionIDErr)
 	}
 
 	logging.Debug(logCtx, "resume session completed",
