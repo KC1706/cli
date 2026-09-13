@@ -222,7 +222,11 @@ func (e *Agent) WriteSession(ctx context.Context, session *agent.AgentSession) e
 		if err != nil {
 			return fmt.Errorf("write-session: open session store: %w", err)
 		}
-		if _, err := store.Name(session.SessionRef); err != nil {
+		name, err := store.Name(session.SessionRef)
+		if err != nil {
+			return fmt.Errorf("write-session: validate session reference: %w", err)
+		}
+		if err := store.ValidateWritePath(name); err != nil {
 			return fmt.Errorf("write-session: validate session reference: %w", err)
 		}
 	}

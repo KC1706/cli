@@ -307,6 +307,8 @@ func TestValidateAgentID(t *testing.T) {
 }
 
 func TestValidateAgentSessionID(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		id      string
@@ -332,10 +334,29 @@ func TestValidateAgentSessionID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			err := ValidateAgentSessionID(tt.id)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateAgentSessionID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
 			}
 		})
+	}
+
+	for _, device := range []string{
+		"CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+	} {
+		for _, id := range []string{strings.ToLower(device), strings.ToLower(device) + ".jsonl"} {
+			t.Run("Windows reserved device "+id, func(t *testing.T) {
+				t.Parallel()
+
+				err := ValidateAgentSessionID(id)
+				if err == nil || !strings.Contains(err.Error(), "reserved Windows device name") {
+					t.Errorf("ValidateAgentSessionID(%q) error = %v, want reserved Windows device name", id, err)
+				}
+			})
+		}
 	}
 }

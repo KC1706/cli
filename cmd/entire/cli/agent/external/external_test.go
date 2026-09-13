@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
 
 // testBinaryDir creates a temp directory with a mock entire-agent-test binary.
@@ -237,7 +238,7 @@ func TestNew_Valid(t *testing.T) {
 	}
 }
 
-func TestWriteSession_RejectsOutsideStoreBeforeSubprocess(t *testing.T) {
+func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 	t.Parallel()
 
 	if _, err := exec.LookPath("sh"); err != nil {
@@ -245,11 +246,47 @@ func TestWriteSession_RejectsOutsideStoreBeforeSubprocess(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		relative bool
+		name       string
+		wantErr    error
+		sessionRef func(t *testing.T, sessionDir, outsideDir string) string
 	}{
-		{name: "absolute", relative: false},
-		{name: "relative", relative: true},
+		{
+			name:    "absolute outside store",
+			wantErr: agent.ErrOutsideSessionStore,
+			sessionRef: func(_ *testing.T, _, outsideDir string) string {
+				return filepath.Join(outsideDir, "session.jsonl")
+			},
+		},
+		{
+			name:    "relative",
+			wantErr: agent.ErrOutsideSessionStore,
+			sessionRef: func(_ *testing.T, _, _ string) string {
+				return "session.jsonl"
+			},
+		},
+		{
+			name:    "symlinked leaf",
+			wantErr: osroot.ErrSymlinkedPath,
+			sessionRef: func(t *testing.T, sessionDir, outsideDir string) string {
+				t.Helper()
+				ref := filepath.Join(sessionDir, "session.jsonl")
+				if err := os.Symlink(filepath.Join(outsideDir, "session.jsonl"), ref); err != nil {
+					t.Skipf("symlink not supported: %v", err)
+				}
+				return ref
+			},
+		},
+		{
+			name:    "symlinked parent",
+			wantErr: osroot.ErrSymlinkedPath,
+			sessionRef: func(t *testing.T, sessionDir, outsideDir string) string {
+				t.Helper()
+				if err := os.Symlink(outsideDir, filepath.Join(sessionDir, "linked")); err != nil {
+					t.Skipf("symlink not supported: %v", err)
+				}
+				return filepath.Join(sessionDir, "linked", "session.jsonl")
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -263,20 +300,27 @@ func TestWriteSession_RejectsOutsideStoreBeforeSubprocess(t *testing.T) {
 				"  write-session)\n    cat > \"$(dirname \"$0\")/write-session-input\"\n    ;;", 1)
 			binPath := testBinaryDir(t, script)
 			ea := newExternalAgent(t, binPath)
-			marker := filepath.Join(filepath.Dir(binPath), "write-session-input")
-			sessionRef := filepath.Join(filepath.Dir(binPath), "outside.jsonl")
-			if tt.relative {
-				sessionRef = "outside.jsonl"
+			binDir := filepath.Dir(binPath)
+			sessionDir := filepath.Join(binDir, "sessions")
+			if err := os.MkdirAll(sessionDir, 0o750); err != nil {
+				t.Fatalf("create session directory: %v", err)
 			}
+			outsideDir := t.TempDir()
+			sessionRef := tt.sessionRef(t, sessionDir, outsideDir)
+
 			err := ea.WriteSession(t.Context(), &agent.AgentSession{
 				RepoPath:   t.TempDir(),
 				SessionRef: sessionRef,
 			})
-			if !errors.Is(err, agent.ErrOutsideSessionStore) {
-				t.Fatalf("WriteSession() error = %v, want ErrOutsideSessionStore", err)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("WriteSession() error = %v, want %v", err, tt.wantErr)
 			}
+			marker := filepath.Join(binDir, "write-session-input")
 			if _, err := os.Stat(marker); !os.IsNotExist(err) {
 				t.Fatalf("write-session subprocess was invoked; marker stat error = %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(outsideDir, "session.jsonl")); !os.IsNotExist(err) {
+				t.Fatalf("outside file was created; stat error = %v", err)
 			}
 		})
 	}

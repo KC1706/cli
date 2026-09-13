@@ -101,6 +101,9 @@ func ValidateAgentSessionID(id string) error {
 	if strings.HasPrefix(id, "-") {
 		return fmt.Errorf("invalid agent session ID %q: starts with dash", id)
 	}
+	if windowsReservedDeviceNameRegex.MatchString(id) {
+		return fmt.Errorf("invalid agent session ID %q: reserved Windows device name", id)
+	}
 	if !pathSafeRegex.MatchString(id) {
 		return fmt.Errorf("invalid agent session ID %q: must be alphanumeric with underscores/hyphens only", id)
 	}
