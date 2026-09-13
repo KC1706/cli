@@ -1153,6 +1153,41 @@ func TestRestoreResumeSessions_DoesNotLegacyFallbackWhenModernSessionsAreUnsafe(
 	}
 }
 
+func TestRestoreResumeSessions_PreservesSafeSingleSessionNoTranscriptFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
+	cleanupResumeTestRepo(t, repo, tmpDir)
+	ag := &recordingResumeAgent{sessionDir: filepath.Join(tmpDir, "sessions")}
+	t.Cleanup(agent.SnapshotRegistryForTesting())
+	agent.Register(ag.Name(), func() agent.Agent { return ag })
+
+	cpID := id.MustCheckpointID("fafafafafafa")
+	const sessionID = "safe-session"
+	writeCommittedResumeCheckpointWithTranscript(t, repo, cpID, sessionID, time.Now(), ag.Type(), nil)
+	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
+	info, err := readCheckpointInfoFromStore(t.Context(), store, cpID)
+	if err != nil {
+		t.Fatalf("read checkpoint metadata: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	restored, err := restoreResumeSessions(t.Context(), &stdout, &stderr, info, false)
+	if err != nil {
+		t.Fatalf("restoreResumeSessions() error = %v", err)
+	}
+	if len(restored) != 0 {
+		t.Fatalf("restored sessions = %#v, want none", restored)
+	}
+	if !strings.Contains(stdout.String(), "session log not available") {
+		t.Fatalf("stdout = %q, want missing-log message", stdout.String())
+	}
+	if want := ag.FormatResumeCommand(sessionID); !strings.Contains(stdout.String(), want) {
+		t.Fatalf("stdout = %q, want resume command %q", stdout.String(), want)
+	}
+}
+
 func TestRestoreResumeSessions_PreservesLegacySingleSessionFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)

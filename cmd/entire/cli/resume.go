@@ -19,6 +19,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/entireio/cli/cmd/entire/cli/validation"
 
 	"charm.land/huh/v2"
 	"github.com/go-git/go-git/v6"
@@ -944,11 +945,11 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	}
 
 	sessions, restoreErr := strat.RestoreLogsOnly(ctx, w, errW, point, force)
-	isLegacySingleSession := metadata.SessionCount == 0 && len(metadata.SessionIDs) == 0
-	if isLegacySingleSession && (restoreErr != nil || len(sessions) == 0) {
-		// Keep the legacy single-session fallback for old checkpoints without
-		// per-session metadata. Modern checkpoints, including single-session
-		// checkpoints, must not retry a session that RestoreLogsOnly skipped.
+	isMultiSession := metadata.SessionCount > 1 || len(metadata.SessionIDs) > 1
+	sessionIDIsSafe := validation.ValidateSessionID(sessionID) == nil
+	if sessionIDIsSafe && (restoreErr != nil || (len(sessions) == 0 && !isMultiSession)) {
+		// Preserve the single-session fallback for missing logs and older
+		// checkpoints, but never retry an unsafe ID that RestoreLogsOnly skipped.
 		session, ok, err := restoreSingleSession(ctx, w, ag, sessionID, checkpointID, repoRoot, force)
 		if err != nil || !ok {
 			return nil, err
