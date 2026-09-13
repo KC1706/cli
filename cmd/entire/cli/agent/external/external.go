@@ -214,6 +214,11 @@ func (e *Agent) WriteSession(ctx context.Context, session *agent.AgentSession) e
 		if !filepath.IsAbs(session.SessionRef) {
 			return fmt.Errorf("write-session: validate session reference: %w: %s is not absolute", agent.ErrOutsideSessionStore, session.SessionRef)
 		}
+		for _, component := range strings.Split(filepath.ToSlash(session.SessionRef), "/") {
+			if component == "." || component == ".." {
+				return fmt.Errorf("write-session: validate session reference: %w: %s contains a dot path component", agent.ErrOutsideSessionStore, session.SessionRef)
+			}
+		}
 		sessionDir, err := e.getSessionDir(ctx, session.RepoPath)
 		if err != nil {
 			return fmt.Errorf("write-session: open session store: %w", err)

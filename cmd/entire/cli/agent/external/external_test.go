@@ -287,6 +287,22 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 				return filepath.Join(sessionDir, "linked", "session.jsonl")
 			},
 		},
+		{
+			name:    "symlink plus parent traversal",
+			wantErr: agent.ErrOutsideSessionStore,
+			sessionRef: func(t *testing.T, sessionDir, outsideDir string) string {
+				t.Helper()
+				targetDir := filepath.Join(outsideDir, "child")
+				if err := os.Mkdir(targetDir, 0o750); err != nil {
+					t.Fatalf("create symlink target: %v", err)
+				}
+				linked := filepath.Join(sessionDir, "linked")
+				if err := os.Symlink(targetDir, linked); err != nil {
+					t.Skipf("symlink not supported: %v", err)
+				}
+				return linked + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "session.jsonl"
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
