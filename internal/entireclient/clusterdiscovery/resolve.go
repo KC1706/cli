@@ -17,8 +17,8 @@ import (
 // ResolveContextForCluster picks the local login context to authenticate
 // git operations against clusterHost.
 //
-// It separates two concerns that used to be conflated in a single
-// cluster→context binding:
+// It keeps two concerns separate rather than binding cluster→context
+// directly:
 //
 //   - Which control plane(s) front the cluster — an objective infra fact.
 //     Discovered from the cluster's /.well-known/entire-cluster.json and

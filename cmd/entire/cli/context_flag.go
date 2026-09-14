@@ -14,16 +14,11 @@ import (
 //
 // Binding through a pflag.Value rather than a PersistentPreRun is deliberate:
 // Set() runs during flag parsing — before any PreRun, before RunE, and before
-// anything resolves a token — so there is no ordering to get wrong.
-//
-// That ordering is the whole reason, and it is worth being clear that it is now
-// the only one. This used to also argue that a root PersistentPreRun would be
-// shadowed by the subtrees that define their own (agent_group.go, the per-agent
-// hooks commands), because cobra runs only the closest hook in the chain by
-// default. It no longer does: root.go sets cobra.EnableTraverseRunHooks, so
-// every ancestor's hook runs, root first. A pre-run would therefore work today
-// — it would just resolve the identity later than flag parsing does, for no
-// gain.
+// anything resolves a token — so there is no ordering to get wrong. That
+// ordering is the only reason: root.go sets cobra.EnableTraverseRunHooks, so a
+// root PersistentPreRun is not shadowed by the subtrees that define their own
+// (agent_group.go, the per-agent hooks commands) and would work too, just
+// resolving the identity later than flag parsing does, for no gain.
 type contextFlagValue struct{ name string }
 
 func (v *contextFlagValue) String() string { return v.name }
@@ -41,15 +36,14 @@ func (v *contextFlagValue) Set(name string) error {
 // The in-process override alone does not reach a child, and several commands
 // spawn one that selects a login by itself: `repo clone` execs `git clone
 // entire://…`, and git runs the `entire` remote helper as a separate process
-// that re-resolves credentials from the saved contexts; `resume`, `explain`,
+// that resolves credentials from the saved contexts; `resume`, `explain`,
 // `trail create` and checkpoint-policy fetch or push through the same helper
-// whenever origin is an entire:// URL. Without this the helper fell back to
-// the active context and, with several logins eligible for the cluster,
-// refused with the ambiguity error the flag was passed to avoid (COR-1630).
-// ENTIRE_CONTEXT is the channel the helper already honours for
-// `ENTIRE_CONTEXT=… git push`, and it is exported here rather than plumbed into
-// each exec for the same reason the flag is global rather than per-command: a
-// new spawn site would otherwise silently drop it.
+// whenever origin is an entire:// URL. Without the export the helper sees only
+// the active context and, with several logins eligible for the cluster, fails
+// with the ambiguity error the flag exists to avoid (COR-1630). ENTIRE_CONTEXT
+// is the channel the helper honours for `ENTIRE_CONTEXT=… git push`, and it is
+// set here rather than on each exec for the same reason the flag is global
+// rather than per-command: a new spawn site would otherwise silently drop it.
 //
 // Mutating the process environment is deliberate and in scope: flagOverride is
 // already process-global on the grounds that one CLI invocation acts as one
