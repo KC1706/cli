@@ -1098,12 +1098,19 @@ func TestRestoreLogsOnly_SkipsUnsafeCheckpointSessionIDBeforeAgentCalls(t *testi
 
 func TestRestoreResumeSessions_RejectsUnsafeModernSessionsWithoutLegacyFallback(t *testing.T) {
 	tests := []struct {
-		name       string
-		unsafeIDs  []string
-		checkpoint id.CheckpointID
+		name              string
+		unsafeIDs         []string
+		topLevelSessionID string
+		checkpoint        id.CheckpointID
 	}{
 		{name: "single session", unsafeIDs: []string{".. "}, checkpoint: id.MustCheckpointID("fefefefefefe")},
 		{name: "multiple sessions", unsafeIDs: []string{".. ", " .."}, checkpoint: id.MustCheckpointID("ffffffffffff")},
+		{
+			name:              "multiple sessions with safe top-level ID",
+			unsafeIDs:         []string{".. ", " .."},
+			topLevelSessionID: "safe-session",
+			checkpoint:        id.MustCheckpointID("edededededed"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -1138,6 +1145,9 @@ func TestRestoreResumeSessions_RejectsUnsafeModernSessionsWithoutLegacyFallback(
 			}
 			if info.SessionCount != len(tt.unsafeIDs) || len(info.SessionIDs) != len(tt.unsafeIDs) {
 				t.Fatalf("checkpoint metadata sessions: count=%d IDs=%v, want %d", info.SessionCount, info.SessionIDs, len(tt.unsafeIDs))
+			}
+			if tt.topLevelSessionID != "" {
+				info.SessionID = tt.topLevelSessionID
 			}
 			factoryCalls = 0
 			ag.getSessionDirCalls = 0

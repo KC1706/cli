@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -110,14 +111,23 @@ func (s *SessionStore) openRoot() (*os.Root, error) {
 	return openVerifiedStoreRoot(s.dir, info)
 }
 
-// openRootForWrite is openRoot with the store directory created first. The
-// directory is the root itself, so it cannot be created through it — this is the
-// one place that reaches it from the outside. The caller closes the result.
+// openRootForWrite opens the nearest existing directory, then creates and opens
+// the store beneath that pinned root. The caller closes the result.
 func (s *SessionStore) openRootForWrite() (*os.Root, error) {
-	if err := os.MkdirAll(s.dir, 0o750); err != nil {
+	ancestorRoot, relativeStorePath, err := s.openNearestExistingRoot()
+	if err != nil {
+		return nil, fmt.Errorf("open session directory: %w", err)
+	}
+	if relativeStorePath == "." {
+		return ancestorRoot, nil
+	}
+	defer ancestorRoot.Close()
+
+	root, err := createStoreRootBelow(ancestorRoot, relativeStorePath)
+	if err != nil {
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
-	return s.openRoot()
+	return root, nil
 }
 
 // SessionFile resolves agentSessionID to a name inside the store, and to the
@@ -129,6 +139,9 @@ func (s *SessionStore) openRootForWrite() (*os.Root, error) {
 // name relative to the store rejects an ID that walked out of the directory,
 // which a plain filepath.Join would have produced silently.
 func (s *SessionStore) SessionFile(agentSessionID string) (name, absPath string, err error) {
+	if err := validation.ValidateSessionID(agentSessionID); err != nil {
+		return "", "", fmt.Errorf("resolve session file: %w: %w", ErrOutsideSessionStore, err)
+	}
 	resolved := s.agent.ResolveSessionFile(s.dir, agentSessionID)
 	name, err = s.Name(resolved)
 	if err != nil {
@@ -191,47 +204,69 @@ func openVerifiedStoreRoot(dir string, before os.FileInfo) (*os.Root, error) {
 	return root, nil
 }
 
+// openNearestExistingRoot returns a pinned root for the nearest existing
+// ancestor of the store and the store's slash-separated path beneath it. The
+// relative path is "." when the store already exists. Stopping at the nearest
+// ancestor preserves stable platform aliases above it, such as macOS /var.
+func (s *SessionStore) openNearestExistingRoot() (*os.Root, string, error) {
+	for candidate := s.dir; ; candidate = filepath.Dir(candidate) {
+		info, err := os.Lstat(candidate)
+		if err == nil {
+			root, openErr := openVerifiedStoreRoot(candidate, info)
+			if openErr != nil {
+				return nil, "", openErr
+			}
+			relativeStorePath, relErr := filepath.Rel(candidate, s.dir)
+			if relErr != nil {
+				_ = root.Close()
+				return nil, "", fmt.Errorf("resolve session store below %s: %w", candidate, relErr)
+			}
+			return root, filepath.ToSlash(relativeStorePath), nil
+		}
+		if !os.IsNotExist(err) || filepath.Dir(candidate) == candidate {
+			return nil, "", fmt.Errorf("inspect session store ancestor %s: %w", candidate, err)
+		}
+	}
+}
+
+func createStoreRootBelow(ancestorRoot *os.Root, relativeStorePath string) (*os.Root, error) {
+	if err := osroot.MkdirAllNoSymlink(ancestorRoot, relativeStorePath, 0o750); err != nil {
+		return nil, fmt.Errorf("create %s: %w", relativeStorePath, err)
+	}
+	parentPath, leaf := path.Split(relativeStorePath)
+	parentPath = strings.TrimSuffix(parentPath, "/")
+	parentRoot, closeParent, err := osroot.OpenDirNoSymlinks(ancestorRoot, parentPath)
+	if err != nil {
+		return nil, fmt.Errorf("open parent of %s: %w", relativeStorePath, err)
+	}
+	defer closeParent()
+	root, err := osroot.OpenChild(parentRoot, leaf)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", relativeStorePath, err)
+	}
+	return root, nil
+}
+
 // ValidateWritePath rejects a symlink at the store root or in any existing
 // component of name. A missing store is allowed because the external agent may
 // create it, provided its nearest existing ancestor can be pinned as a real
 // directory.
-// External subprocesses use this as a defense-in-depth preflight and built-in
-// writes use it before creating a missing store.
+// External subprocesses use this as a point-in-time defense-in-depth preflight.
+// Built-in writes repeat the lexical check and keep the root pinned through
+// directory creation and the write itself.
 func (s *SessionStore) ValidateWritePath(name string) error {
-	for _, component := range strings.Split(filepath.ToSlash(name), "/") {
-		if err := validation.ValidateFileNameComponent(component); err != nil {
-			return fmt.Errorf("inspect session write path: %w: %w", ErrOutsideSessionStore, err)
-		}
+	if err := validateWriteName(name); err != nil {
+		return err
 	}
 
-	storeInfo, err := os.Lstat(s.dir)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("inspect session write path: %w", err)
-		}
-		// Stop at the first existing ancestor. Walking farther would reject
-		// normal platform aliases such as macOS /var even though the nearest
-		// directory from which the store will be created is real.
-		for ancestor := filepath.Dir(s.dir); ; ancestor = filepath.Dir(ancestor) {
-			ancestorInfo, ancestorErr := os.Lstat(ancestor)
-			if ancestorErr == nil {
-				ancestorRoot, openErr := openVerifiedStoreRoot(ancestor, ancestorInfo)
-				if openErr != nil {
-					return fmt.Errorf("inspect session write path: %w", openErr)
-				}
-				_ = ancestorRoot.Close()
-				return nil
-			}
-			if !os.IsNotExist(ancestorErr) || filepath.Dir(ancestor) == ancestor {
-				return fmt.Errorf("inspect session write path: %w", ancestorErr)
-			}
-		}
-	}
-	root, err := openVerifiedStoreRoot(s.dir, storeInfo)
+	root, relativeStorePath, err := s.openNearestExistingRoot()
 	if err != nil {
 		return fmt.Errorf("inspect session write path: %w", err)
 	}
 	defer root.Close()
+	if relativeStorePath != "." {
+		return nil
+	}
 
 	info, err := osroot.LstatNoSymlinks(root, name)
 	if err != nil {
@@ -242,6 +277,15 @@ func (s *SessionStore) ValidateWritePath(name string) error {
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s: %w", name, osroot.ErrSymlinkedPath)
+	}
+	return nil
+}
+
+func validateWriteName(name string) error {
+	for _, component := range strings.Split(filepath.ToSlash(name), "/") {
+		if err := validation.ValidateFileNameComponent(component); err != nil {
+			return fmt.Errorf("inspect session write path: %w: %w", ErrOutsideSessionStore, err)
+		}
 	}
 	return nil
 }
@@ -260,7 +304,7 @@ func (s *SessionStore) ReadFile(name string) ([]byte, error) {
 // layouts nest (Gemini keys by project hash, Pi by encoded repo path), so the
 // parents are made here rather than at each call site.
 func (s *SessionStore) WriteFile(name string, data []byte, perm os.FileMode) error {
-	if err := s.ValidateWritePath(name); err != nil {
+	if err := validateWriteName(name); err != nil {
 		return err
 	}
 	root, err := s.openRootForWrite()

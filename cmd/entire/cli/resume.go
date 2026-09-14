@@ -942,8 +942,15 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	if restoreErr != nil {
 		return nil, fmt.Errorf("failed to restore session logs: %w", restoreErr)
 	}
-	if len(sessions) == 0 && sessionIDErr != nil {
-		return nil, fmt.Errorf("unsafe checkpoint session ID %q: %w", sessionID, sessionIDErr)
+	if len(sessions) == 0 {
+		for _, storedSessionID := range metadata.SessionIDs {
+			if err := validation.ValidateSessionID(storedSessionID); err != nil {
+				return nil, fmt.Errorf("unsafe checkpoint session ID %q: %w", storedSessionID, err)
+			}
+		}
+		if sessionIDErr != nil {
+			return nil, fmt.Errorf("unsafe checkpoint session ID %q: %w", sessionID, sessionIDErr)
+		}
 	}
 
 	logging.Debug(logCtx, "resume session completed",

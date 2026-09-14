@@ -60,6 +60,25 @@ func TestSessionStore_SessionFileRejectsEscapingSessionID(t *testing.T) {
 	require.ErrorIs(t, err, agent.ErrOutsideSessionStore)
 }
 
+func TestSessionStore_SessionFileRejectsUnsafeIDBeforeResolver(t *testing.T) {
+	t.Parallel()
+
+	for _, sessionID := range []string{"session.", "CON"} {
+		t.Run(sessionID, func(t *testing.T) {
+			t.Parallel()
+
+			resolverCalled := false
+			store, _ := newStore(t, func(dir, id string) string {
+				resolverCalled = true
+				return joinResolve(dir, id)
+			})
+			_, _, err := store.SessionFile(sessionID)
+			require.ErrorIs(t, err, agent.ErrOutsideSessionStore)
+			assert.False(t, resolverCalled, "unsafe ID must not reach the agent resolver")
+		})
+	}
+}
+
 // An agent that resolves to a sibling directory is rejected too — the store's
 // job is to report that, not to guess whether it was intended.
 func TestSessionStore_SessionFileRejectsLayoutOutsideTheStore(t *testing.T) {
