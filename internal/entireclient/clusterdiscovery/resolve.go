@@ -359,9 +359,14 @@ var autoSelectNoticeW io.Writer = os.Stderr
 // chosen. Auto-selection settles a single candidate only: picking among several
 // would make the acting identity depend on what else happens to be stored, so
 // the user picks. Names are sorted, so the message is stable across saves.
+//
+// Both remedies are named because they scope differently: `auth use` switches
+// the machine-wide default, while `--context` (or $ENTIRE_CONTEXT, which is how
+// the selection reaches git's remote helper) acts as that login for one command
+// and leaves the active context alone.
 func ambiguousContextError(subject string, eligible []*contexts.Context) error {
-	return fmt.Errorf("multiple login contexts can authenticate against %s (%s); choose one with `entire auth use <context>` and re-run",
-		subject, strings.Join(contextNames(eligible), ", "))
+	return fmt.Errorf("multiple login contexts can authenticate against %s (%s); choose one for this command with `entire --context <context> …` (or %s=<context>), or switch the default with `entire auth use <context>`, and re-run",
+		subject, strings.Join(contextNames(eligible), ", "), contexts.EnvContextVar)
 }
 
 // describeSelection labels a resolved identity for debug output, naming the
