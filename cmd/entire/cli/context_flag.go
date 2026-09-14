@@ -69,8 +69,7 @@ var inheritedContextEnv struct {
 // launch, whose own hooks and pushes then act as the flag's login for as long
 // as they run. The flag outranks an inherited ENTIRE_CONTEXT in process
 // (contexts.requestedContext), so overwriting it here keeps parent and children
-// agreeing. A blank name clears the in-process override and restores whatever
-// the environment said before the first export.
+// agreeing. A blank name restores the snapshot in inheritedContextEnv.
 func exportContextToChildren(name string) error {
 	if !inheritedContextEnv.captured {
 		inheritedContextEnv.value, inheritedContextEnv.present = os.LookupEnv(contexts.EnvContextVar)

@@ -133,9 +133,7 @@ func NewRootCmd() *cobra.Command {
 				telemetryEnabled = settings.Telemetry
 			}
 
-			// Check if telemetry is enabled
 			if telemetryEnabled != nil && *telemetryEnabled {
-				// Use detached tracking (non-blocking)
 				installedAgents := GetAgentsWithHooksInstalled(cmd.Context())
 				agentStr := JoinAgentNames(installedAgents)
 				telemetry.TrackCommandDetached(cmd, agentStr, settings.Enabled, versioninfo.Version)
