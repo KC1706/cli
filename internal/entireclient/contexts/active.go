@@ -15,7 +15,9 @@ import (
 // `ENTIRE_CONTEXT=staging git push` is the only way to scope a push or fetch to
 // a login other than the active one. The env var also survives into hooks and
 // subprocesses, which is what makes a whole shell session scopable without
-// mutating shared state.
+// mutating shared state — and is how the `entire` CLI forwards its own
+// `--context` to the git and helper processes it spawns (it exports the flag
+// into its environment as it is parsed).
 const EnvContextVar = "ENTIRE_CONTEXT"
 
 // flagOverride records an explicit `--context` selection for this process. It is

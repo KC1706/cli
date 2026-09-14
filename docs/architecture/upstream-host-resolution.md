@@ -216,7 +216,24 @@ apply only when the identity came from `current_context` (or there is none):
   gates only the choice made *for* the user, never one they made.
 - several are eligible → an ambiguity error naming them, sorted
   (`clusterdiscovery.ambiguousContextError`). Picking one would make the acting
-  identity depend on what else happens to be stored.
+  identity depend on what else happens to be stored. The error names both
+  remedies — `entire --context <name> …` / `ENTIRE_CONTEXT=<name>` for one
+  command, `entire auth use <name>` for the machine-wide default — because a
+  cluster that trusts several cores (a `us` cluster advertising both the `us`
+  and `eu` cores, so a cross-jurisdiction login can reach it) makes this the
+  ordinary case for anyone holding a login per jurisdiction, and switching the
+  default to clone once is the wrong lever.
+
+`--context` has to cross a process boundary whenever the CLI spawns git against
+an `entire://` remote — `repo clone` execs `git clone`, and `resume`, `explain`,
+`trail create` and checkpoint-policy fetch or push — because git runs
+`git-remote-entire` itself and the helper selects a login from the saved
+contexts on its own. The flag is therefore exported into the CLI's own
+environment as `ENTIRE_CONTEXT` the moment it is parsed
+(`exportContextToChildren`, `context_flag.go`), so every child inherits it
+through the same channel `ENTIRE_CONTEXT=… git push` already uses. Before that
+the helper fell back to the active context and hit the ambiguity error the flag
+was passed to avoid (COR-1630).
 
 An **explicit** `--context`/`$ENTIRE_CONTEXT` never falls through to either: the
 user asked for that identity by name, so acting as another behind their back is

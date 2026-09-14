@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"fmt"
+	"os"
+	"strings"
+
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/spf13/cobra"
 )
@@ -28,6 +32,40 @@ func (v *contextFlagValue) Type() string   { return "string" }
 func (v *contextFlagValue) Set(name string) error {
 	v.name = name
 	contexts.SetFlagOverride(name)
+	return exportContextToChildren(name)
+}
+
+// exportContextToChildren publishes the --context selection as ENTIRE_CONTEXT in
+// this process's own environment, so every child inherits it.
+//
+// The in-process override alone does not reach a child, and several commands
+// spawn one that selects a login by itself: `repo clone` execs `git clone
+// entire://…`, and git runs the `entire` remote helper as a separate process
+// that re-resolves credentials from the saved contexts; `resume`, `explain`,
+// `trail create` and checkpoint-policy fetch or push through the same helper
+// whenever origin is an entire:// URL. Without this the helper fell back to
+// the active context and, with several logins eligible for the cluster,
+// refused with the ambiguity error the flag was passed to avoid (COR-1630).
+// ENTIRE_CONTEXT is the channel the helper already honours for
+// `ENTIRE_CONTEXT=… git push`, and it is exported here rather than plumbed into
+// each exec for the same reason the flag is global rather than per-command: a
+// new spawn site would otherwise silently drop it.
+//
+// Mutating the process environment is deliberate and in scope: flagOverride is
+// already process-global on the grounds that one CLI invocation acts as one
+// identity, and this is that same identity, made visible to the children of
+// that same invocation. The flag outranks an inherited ENTIRE_CONTEXT in
+// process (contexts.requestedContext), so overwriting it here keeps parent and
+// children agreeing. A blank name clears the in-process override and is not
+// exported, leaving whatever the environment already said.
+func exportContextToChildren(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	if err := os.Setenv(contexts.EnvContextVar, name); err != nil {
+		return fmt.Errorf("export --context to child processes: %w", err)
+	}
 	return nil
 }
 
