@@ -102,6 +102,9 @@ func NewRootCmd() *cobra.Command {
 			if isShellCompletion(cmd) {
 				return nil
 			}
+			if err := validateContextFlag(cmd); err != nil {
+				return err
+			}
 			safe, err := checkEntireDirBeforeRun(cmd)
 			if err != nil {
 				return err

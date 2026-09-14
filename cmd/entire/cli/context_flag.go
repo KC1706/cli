@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/spf13/cobra"
 )
@@ -30,37 +31,87 @@ func (v *contextFlagValue) Set(name string) error {
 	return exportContextToChildren(name)
 }
 
+// inheritedContextEnv is ENTIRE_CONTEXT as this process received it, captured
+// on the first export so a later blank --context can put it back. Without the
+// snapshot `--context us --context ""` (an alias baking in the first, a wrapper
+// appending the second) clears the in-process override but leaves `us` in the
+// environment, where requestedContext picks it up as $ENTIRE_CONTEXT — the
+// parent and every child act as a login the final flag value did not name, and
+// any error blames a variable the user never set.
+var inheritedContextEnv struct {
+	captured bool
+	value    string
+	present  bool
+}
+
 // exportContextToChildren publishes the --context selection as ENTIRE_CONTEXT in
-// this process's own environment, so every child inherits it.
+// this process's own environment, so every process it spawns inherits it.
 //
-// The in-process override alone does not reach a child, and several commands
-// spawn one that selects a login by itself: `repo clone` execs `git clone
-// entire://…`, and git runs the `entire` remote helper as a separate process
-// that resolves credentials from the saved contexts; `resume`, `explain`,
-// `trail create` and checkpoint-policy fetch or push through the same helper
-// whenever origin is an entire:// URL. Without the export the helper sees only
-// the active context and, with several logins eligible for the cluster, fails
-// with the ambiguity error the flag exists to avoid (COR-1630). ENTIRE_CONTEXT
-// is the channel the helper honours for `ENTIRE_CONTEXT=… git push`, and it is
-// set here rather than on each exec for the same reason the flag is global
-// rather than per-command: a new spawn site would otherwise silently drop it.
+// The in-process override alone does not reach a child, and several built-in
+// commands spawn one that selects a login by itself: `repo clone` execs `git
+// clone entire://…`, and git runs the `entire` remote helper as a separate
+// process that resolves credentials from the saved contexts; `resume`,
+// `explain`, `trail create` and checkpoint-policy fetch or push through the same
+// helper whenever origin is an entire:// URL. Without the export the helper
+// sees only the active context and, with several logins eligible for the
+// cluster, fails with the ambiguity error the flag exists to avoid (COR-1630).
+// ENTIRE_CONTEXT is the channel the helper honours for `ENTIRE_CONTEXT=… git
+// push`, and it is set here rather than on each exec for the same reason the
+// flag is global rather than per-command: a new spawn site would otherwise
+// silently drop it. External plugins are outside this: main.go dispatches them
+// before cobra parses anything, so they never reach Set and take
+// `ENTIRE_CONTEXT=… entire <plugin>` instead.
 //
 // Mutating the process environment is deliberate and in scope: flagOverride is
 // already process-global on the grounds that one CLI invocation acts as one
 // identity, and this is that same identity, made visible to the children of
-// that same invocation. The flag outranks an inherited ENTIRE_CONTEXT in
-// process (contexts.requestedContext), so overwriting it here keeps parent and
-// children agreeing. A blank name clears the in-process override and is not
-// exported, leaving whatever the environment already said.
+// that same invocation — including agents that `review` or `investigate`
+// launch, whose own hooks and pushes then act as the flag's login for as long
+// as they run. The flag outranks an inherited ENTIRE_CONTEXT in process
+// (contexts.requestedContext), so overwriting it here keeps parent and children
+// agreeing. A blank name clears the in-process override and restores whatever
+// the environment said before the first export.
 func exportContextToChildren(name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil
+	if !inheritedContextEnv.captured {
+		inheritedContextEnv.value, inheritedContextEnv.present = os.LookupEnv(contexts.EnvContextVar)
+		inheritedContextEnv.captured = true
 	}
-	if err := os.Setenv(contexts.EnvContextVar, name); err != nil {
+	name = strings.TrimSpace(name)
+	switch {
+	case name != "":
+		return wrapExportErr(os.Setenv(contexts.EnvContextVar, name))
+	case inheritedContextEnv.present:
+		return wrapExportErr(os.Setenv(contexts.EnvContextVar, inheritedContextEnv.value))
+	default:
+		return wrapExportErr(os.Unsetenv(contexts.EnvContextVar))
+	}
+}
+
+// wrapExportErr names the operation on a Setenv/Unsetenv failure. The failure
+// is close to unreachable (a constant key, an argv value), but a silent
+// continue would leave the parent acting as one identity and its children as
+// another — the exact split the export exists to prevent — so it is an error.
+func wrapExportErr(err error) error {
+	if err != nil {
 		return fmt.Errorf("export --context to child processes: %w", err)
 	}
 	return nil
+}
+
+// validateContextFlag fails early, in the parent and blaming the flag, when
+// --context names no saved login. Commands that resolve a login themselves
+// already produce that error; the ones that do not — `repo clone` handed a
+// verbatim entire:// URL passes straight to git — would otherwise let the
+// remote helper find out first and report `$ENTIRE_CONTEXT selected login
+// context "typo"`, sending the user to look for a shell variable they never
+// set. Only the flag is checked: an exported ENTIRE_CONTEXT is the user's own
+// and is validated wherever it is consumed, as before.
+func validateContextFlag(cmd *cobra.Command) error {
+	if !cmd.Flags().Changed("context") {
+		return nil
+	}
+	_, _, err := auth.Contexts()
+	return err //nolint:wrapcheck // UnknownContextError is already a complete operator message
 }
 
 // addContextFlag registers --context as a persistent flag on the root command,
@@ -79,7 +130,7 @@ func addContextFlag(cmd *cobra.Command) {
 	// `--context name`. Any other back-quoted span here (e.g. around a command to
 	// run) would be silently hijacked as the placeholder instead.
 	cmd.PersistentFlags().Var(&contextFlagValue{}, "context",
-		"Act as this saved login `name` for this command only, instead of the active context (entire auth contexts lists them)")
+		"Act as this saved login `name` for this command only — including the git and agent processes it spawns — instead of the active context (entire auth contexts lists them)")
 	if err := cmd.RegisterFlagCompletionFunc("context", completeContextFlag); err != nil {
 		panic("register --context completion: " + err.Error())
 	}
