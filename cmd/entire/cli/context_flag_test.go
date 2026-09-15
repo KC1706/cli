@@ -78,6 +78,25 @@ func TestContextFlag_BlankRestoresInheritedEnvironment(t *testing.T) {
 	})
 }
 
+// TestContextFlag_FailedExportRecordsNoOverride: when the environment refuses
+// the value (a NUL byte is the one thing os.Setenv rejects), Set fails without
+// recording the in-process override, so the parent cannot act as an identity
+// its children never received.
+func TestContextFlag_FailedExportRecordsNoOverride(t *testing.T) {
+	t.Setenv(contexts.EnvContextVar, "from-shell")
+	contexts.SetFlagOverrideForTest(t, "")
+	resetContextExportForTest(t)
+
+	v := &contextFlagValue{}
+	require.Error(t, v.Set("bad\x00name"))
+
+	assert.Empty(t, v.String())
+	assert.Equal(t, "from-shell", os.Getenv(contexts.EnvContextVar))
+	sel, err := (&contexts.File{Contexts: []*contexts.Context{{Name: "from-shell", CoreURL: "https://c.example"}}}).Active()
+	require.NoError(t, err)
+	assert.Equal(t, "$"+contexts.EnvContextVar, sel.Source, "no flag override may be recorded after a failed export")
+}
+
 // TestValidateContextFlag: a --context naming no saved login is refused in the
 // parent, attributed to the flag, before any child could report it as
 // $ENTIRE_CONTEXT. Without the flag nothing is checked, so an inherited

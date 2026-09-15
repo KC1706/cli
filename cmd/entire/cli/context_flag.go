@@ -25,10 +25,15 @@ type contextFlagValue struct{ name string }
 func (v *contextFlagValue) String() string { return v.name }
 func (v *contextFlagValue) Type() string   { return "string" }
 
+// Export before recording the override: a failed export must not leave this
+// process acting as one identity while its children act as another.
 func (v *contextFlagValue) Set(name string) error {
+	if err := exportContextToChildren(name); err != nil {
+		return err
+	}
 	v.name = name
 	contexts.SetFlagOverride(name)
-	return exportContextToChildren(name)
+	return nil
 }
 
 // inheritedContextEnv is ENTIRE_CONTEXT as this process received it, captured
