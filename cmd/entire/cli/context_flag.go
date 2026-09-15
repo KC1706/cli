@@ -104,9 +104,14 @@ func wrapExportErr(err error) error {
 // remote helper find out first and report `$ENTIRE_CONTEXT selected login
 // context "typo"`, sending the user to look for a shell variable they never
 // set. Only the flag is checked: an exported ENTIRE_CONTEXT is the user's own
-// and is validated wherever it is consumed, as before.
+// and is validated wherever it is consumed, as before. The gate is the flag's
+// VALUE, not whether it was passed: a blank `--context ""` clears the override
+// (SetFlagOverride treats whitespace as "clear"), so checking on presence would
+// resolve straight through to $ENTIRE_CONTEXT and refuse the user's own
+// variable — on every command, `version` included.
 func validateContextFlag(cmd *cobra.Command) error {
-	if !cmd.Flags().Changed("context") {
+	f := cmd.Flags().Lookup("context")
+	if f == nil || strings.TrimSpace(f.Value.String()) == "" {
 		return nil
 	}
 	_, _, err := auth.Contexts()

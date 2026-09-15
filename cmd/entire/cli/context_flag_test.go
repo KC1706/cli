@@ -114,6 +114,14 @@ func TestValidateContextFlag(t *testing.T) {
 		require.NoError(t, validateContextFlag(cmd))
 	})
 
+	t.Run("blank flag, nothing checked", func(t *testing.T) {
+		contexts.SetFlagOverrideForTest(t, "")
+		t.Setenv(contexts.EnvContextVar, "dangling-from-shell")
+		cmd := newCmd()
+		require.NoError(t, cmd.ParseFlags([]string{"--context", "us", "--context", ""}))
+		require.NoError(t, validateContextFlag(cmd), "a blank flag clears the override; it must not turn the check on the user's variable")
+	})
+
 	t.Run("no flag, nothing checked", func(t *testing.T) {
 		contexts.SetFlagOverrideForTest(t, "")
 		t.Setenv(contexts.EnvContextVar, "dangling-from-shell")
