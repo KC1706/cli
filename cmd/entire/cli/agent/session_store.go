@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -104,30 +103,23 @@ func (s *SessionStore) Dir() string { return s.dir }
 // A directory that does not exist is reported unwrapped so callers can classify
 // it with os.IsNotExist.
 func (s *SessionStore) openRoot() (*os.Root, error) {
-	info, err := os.Lstat(s.dir)
-	if err != nil {
-		return nil, err //nolint:wrapcheck // see doc comment
-	}
-	return openVerifiedStoreRoot(s.dir, info)
+	return os.OpenRoot(s.dir) //nolint:wrapcheck // see doc comment
 }
 
-// openRootForWrite opens the nearest existing directory, then creates and opens
-// the store beneath that pinned root. The caller closes the result.
+// openRootForWrite is openRoot with the store directory created first. The
+// directory is the root itself, so it cannot be created through it — this is the
+// one place that reaches it from the outside. The caller closes the result.
+//
+// The store's own location is not a boundary Entire enforces: it comes from the
+// agent (GetSessionDir), not from checkpoint data or a hook payload, and it
+// routinely lives under a symlinked ~/.claude or ~/.codex. What IS enforced is
+// everything below it — see WriteFile, which creates nested directories with
+// MkdirAllNoSymlink and refuses a symlinked leaf.
 func (s *SessionStore) openRootForWrite() (*os.Root, error) {
-	ancestorRoot, relativeStorePath, err := s.openNearestExistingRoot()
-	if err != nil {
-		return nil, fmt.Errorf("open session directory: %w", err)
-	}
-	if relativeStorePath == "." {
-		return ancestorRoot, nil
-	}
-	defer ancestorRoot.Close()
-
-	root, err := createStoreRootBelow(ancestorRoot, relativeStorePath)
-	if err != nil {
+	if err := os.MkdirAll(s.dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
-	return root, nil
+	return s.openRoot()
 }
 
 // SessionFile resolves agentSessionID to a name inside the store, and to the
@@ -179,94 +171,26 @@ func (s *SessionStore) Name(p string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// openVerifiedStoreRoot rejects a link at dir itself and confirms that
-// os.OpenRoot pinned the directory observed by Lstat. Ancestor aliases are
-// already part of the agent-reported store location.
-func openVerifiedStoreRoot(dir string, before os.FileInfo) (*os.Root, error) {
-	if before.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("%s: %w", dir, osroot.ErrSymlinkedPath)
-	}
-	if !before.IsDir() {
-		return nil, fmt.Errorf("%s: %w", dir, osroot.ErrWalkRootNotDirectory)
-	}
-
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, err //nolint:wrapcheck // caller adds the operation context
-	}
-	opened, openErr := root.Stat(".")
-	after, lstatErr := os.Lstat(dir)
-	if openErr != nil || lstatErr != nil || after.Mode()&os.ModeSymlink != 0 ||
-		!after.IsDir() || !os.SameFile(before, opened) || !os.SameFile(after, opened) {
-		_ = root.Close()
-		return nil, fmt.Errorf("%s changed while it was being opened: %w", dir, osroot.ErrReplacedDuringOpen)
-	}
-	return root, nil
-}
-
-// openNearestExistingRoot returns a pinned root for the nearest existing
-// ancestor of the store and the store's slash-separated path beneath it. The
-// relative path is "." when the store already exists. Stopping at the nearest
-// ancestor preserves stable platform aliases above it, such as macOS /var.
-func (s *SessionStore) openNearestExistingRoot() (*os.Root, string, error) {
-	for candidate := s.dir; ; candidate = filepath.Dir(candidate) {
-		info, err := os.Lstat(candidate)
-		if err == nil {
-			root, openErr := openVerifiedStoreRoot(candidate, info)
-			if openErr != nil {
-				return nil, "", openErr
-			}
-			relativeStorePath, relErr := filepath.Rel(candidate, s.dir)
-			if relErr != nil {
-				_ = root.Close()
-				return nil, "", fmt.Errorf("resolve session store below %s: %w", candidate, relErr)
-			}
-			return root, filepath.ToSlash(relativeStorePath), nil
-		}
-		if !os.IsNotExist(err) || filepath.Dir(candidate) == candidate {
-			return nil, "", fmt.Errorf("inspect session store ancestor %s: %w", candidate, err)
-		}
-	}
-}
-
-func createStoreRootBelow(ancestorRoot *os.Root, relativeStorePath string) (*os.Root, error) {
-	if err := osroot.MkdirAllNoSymlink(ancestorRoot, relativeStorePath, 0o750); err != nil {
-		return nil, fmt.Errorf("create %s: %w", relativeStorePath, err)
-	}
-	parentPath, leaf := path.Split(relativeStorePath)
-	parentPath = strings.TrimSuffix(parentPath, "/")
-	parentRoot, closeParent, err := osroot.OpenDirNoSymlinks(ancestorRoot, parentPath)
-	if err != nil {
-		return nil, fmt.Errorf("open parent of %s: %w", relativeStorePath, err)
-	}
-	defer closeParent()
-	root, err := osroot.OpenChild(parentRoot, leaf)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", relativeStorePath, err)
-	}
-	return root, nil
-}
-
-// ValidateWritePath rejects a symlink at the store root or in any existing
-// component of name. A missing store is allowed because the external agent may
-// create it, provided its nearest existing ancestor can be pinned as a real
-// directory.
-// External subprocesses use this as a point-in-time defense-in-depth preflight.
-// Built-in writes repeat the lexical check and keep the root pinned through
-// directory creation and the write itself.
+// ValidateWritePath rejects an unsafe component in name and a symlink at name
+// itself. A missing store is allowed because the external agent may create it.
+//
+// This is a point-in-time preflight for a path handed to an external
+// subprocess, not a containment boundary: the subprocess can race it, and the
+// store's own location is the agent's to choose. Built-in writes go through
+// WriteFile, which repeats the name check and then writes through an os.Root.
 func (s *SessionStore) ValidateWritePath(name string) error {
 	if err := validateWriteName(name); err != nil {
 		return err
 	}
 
-	root, relativeStorePath, err := s.openNearestExistingRoot()
+	root, err := s.openRoot()
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return fmt.Errorf("inspect session write path: %w", err)
 	}
 	defer root.Close()
-	if relativeStorePath != "." {
-		return nil
-	}
 
 	info, err := osroot.LstatNoSymlinks(root, name)
 	if err != nil {

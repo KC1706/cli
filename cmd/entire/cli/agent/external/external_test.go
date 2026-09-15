@@ -325,20 +325,6 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 			},
 		},
 		{
-			name:    "symlinked store root",
-			wantErr: osroot.ErrSymlinkedPath,
-			sessionRef: func(t *testing.T, sessionDir, outsideDir string) string {
-				t.Helper()
-				if err := os.Remove(sessionDir); err != nil {
-					t.Fatalf("remove session directory: %v", err)
-				}
-				if err := os.Symlink(outsideDir, sessionDir); err != nil {
-					t.Skipf("symlink not supported: %v", err)
-				}
-				return filepath.Join(sessionDir, "session.jsonl")
-			},
-		},
-		{
 			name:    "symlinked parent",
 			wantErr: osroot.ErrSymlinkedPath,
 			sessionRef: func(t *testing.T, sessionDir, outsideDir string) string {
