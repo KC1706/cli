@@ -109,13 +109,23 @@ func wrapExportErr(err error) error {
 // (SetFlagOverride treats whitespace as "clear"), so checking on presence would
 // resolve straight through to $ENTIRE_CONTEXT and refuse the user's own
 // variable — on every command, `version` included.
+//
+// On failure the export is undone: the name was published to the environment
+// during flag parsing, before this check could run, and anything spawned on
+// the way out (analytics, the version check) would otherwise inherit a login
+// that does not exist.
 func validateContextFlag(cmd *cobra.Command) error {
 	f := cmd.Flags().Lookup("context")
 	if f == nil || strings.TrimSpace(f.Value.String()) == "" {
 		return nil
 	}
-	_, _, err := auth.Contexts()
-	return err //nolint:wrapcheck // UnknownContextError is already a complete operator message
+	if _, _, err := auth.Contexts(); err != nil {
+		if restoreErr := exportContextToChildren(""); restoreErr != nil {
+			return fmt.Errorf("%w (and %w)", err, restoreErr)
+		}
+		return err //nolint:wrapcheck // UnknownContextError is already a complete operator message
+	}
+	return nil
 }
 
 // addContextFlag registers --context as a persistent flag on the root command,

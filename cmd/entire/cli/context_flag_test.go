@@ -98,14 +98,20 @@ func TestValidateContextFlag(t *testing.T) {
 		return cmd
 	}
 
-	t.Run("unknown name is the flag's error", func(t *testing.T) {
+	t.Run("unknown name is the flag's error and the export is undone", func(t *testing.T) {
+		t.Setenv(contexts.EnvContextVar, "from-shell")
+		contexts.SetFlagOverrideForTest(t, "")
+		resetContextExportForTest(t)
 		cmd := newCmd()
 		require.NoError(t, cmd.ParseFlags([]string{"--context", "typo"}))
+		require.Equal(t, "typo", os.Getenv(contexts.EnvContextVar), "parsing exports before validation can run")
+
 		err := validateContextFlag(cmd)
 		var unknown *contexts.UnknownContextError
 		require.ErrorAs(t, err, &unknown)
 		assert.Equal(t, "--context", unknown.Source)
 		assert.Equal(t, "typo", unknown.Name)
+		assert.Equal(t, "from-shell", os.Getenv(contexts.EnvContextVar), "a refused name must not stay exported for whatever spawns on the way out")
 	})
 
 	t.Run("saved name passes", func(t *testing.T) {
