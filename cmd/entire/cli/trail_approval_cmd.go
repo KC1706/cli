@@ -30,7 +30,7 @@ func buildApprovalRequest(event, message string) (api.TrailApprovalRequest, erro
 
 // resolveNumberedTrail resolves a trail by optional selector, falling back to
 // the current branch (or --branch), and requires it to have a number (the
-// number-keyed subresource endpoints — approvals, threads — reject a trail
+// number-keyed subresource endpoints — approvals, discussions — reject a trail
 // without one).
 func resolveNumberedTrailAtPath(ctx context.Context, client *api.Client, basePath, forge, owner, repoName, selector, branch string) (*api.TrailResource, error) {
 	found, err := resolveTrailBySelectorAtPath(ctx, client, basePath, forge, owner, repoName, selector, branch)

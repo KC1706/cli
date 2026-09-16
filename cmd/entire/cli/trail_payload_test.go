@@ -18,15 +18,15 @@ func TestTrailCollectionsFollowOpaqueCursors(t *testing.T) {
 	for _, base := range []string{"/api/v1/trails/gh/acme/widget", "/api/v1/repos/repo_example/trails"} {
 		t.Run(base, func(t *testing.T) {
 			t.Parallel()
-			for _, collection := range []string{"trails", "threads"} {
+			for _, collection := range []string{"trails", "discussions"} {
 				t.Run(collection, func(t *testing.T) {
 					t.Parallel()
 					requests := 0
 					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						requests++
 						wantPath := base
-						if collection == "threads" {
-							wantPath += "/7/threads"
+						if collection == "discussions" {
+							wantPath += "/7/discussions"
 						}
 						if r.URL.Path != wantPath {
 							t.Errorf("path = %s, want %s", r.URL.Path, wantPath)
@@ -53,8 +53,8 @@ func TestTrailCollectionsFollowOpaqueCursors(t *testing.T) {
 					}))
 					defer srv.Close()
 					client := api.NewClientWithBaseURL("tok", srv.URL)
-					if collection == "threads" {
-						items, err := fetchAllTrailThreads(t.Context(), client, base+"/7/threads")
+					if collection == "discussions" {
+						items, err := fetchAllTrailDiscussions(t.Context(), client, trailDiscussionsPath(base, 7))
 						require.NoError(t, err)
 						require.Len(t, items, 2)
 						require.Equal(t, 2, items[0].MessageCount)
@@ -71,16 +71,24 @@ func TestTrailCollectionsFollowOpaqueCursors(t *testing.T) {
 	}
 }
 
-func TestThreadJSONKeepsCLIKeys(t *testing.T) {
+func TestDiscussionJSONPreservesUnrelatedCLIKeys(t *testing.T) {
 	t.Parallel()
-	var detail api.TrailThreadDetailResponse
-	require.NoError(t, json.Unmarshal([]byte(`{"thread":{"id":"th1","trail_id":"tr1","message_count":2,"created_at":"2026-09-01T00:00:00Z"},"messages":[{"id":"m1","created_at":"2026-09-01T00:00:00Z","replies":[{"id":"r1","created_at":"2026-09-01T00:01:00Z"}]}],"event_cursor":"42"}`), &detail))
+	var detail api.TrailDiscussionDetailResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"discussion":{"id":"th1","trail_id":"tr1","message_count":2,"created_at":"2026-09-01T00:00:00Z"},"messages":[{"id":"m1","created_at":"2026-09-01T00:00:00Z","replies":[{"id":"r1","created_at":"2026-09-01T00:01:00Z"}]}],"event_cursor":"42"}`), &detail))
 	var out bytes.Buffer
-	require.NoError(t, printTrailThreadDetail(&out, detail, true))
+	require.NoError(t, printTrailDiscussionDetail(&out, detail, true))
 	var got map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
 	require.JSONEq(t, `"42"`, string(got["eventCursor"]))
-	require.Contains(t, string(got["thread"]), `"trailId": "tr1"`)
-	require.Contains(t, string(got["thread"]), `"messageCount": 2`)
+	require.Contains(t, string(got["discussion"]), `"trailId": "tr1"`)
+	require.Contains(t, string(got["discussion"]), `"messageCount": 2`)
 	require.Contains(t, string(got["messages"]), `"createdAt": "2026-09-01T00:01:00Z"`)
+	var created api.TrailDiscussionCreateResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"discussion":{"id":"th1","title":"Thread safety","trail_id":"tr1"},"message":{"id":"m1","body":"Keep this thread safe"}}`), &created))
+	encoded, err := json.Marshal(toTrailDiscussionCreateResponseJSON(created))
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(encoded, &got))
+	require.Contains(t, string(got["discussion"]), `"id":"th1"`)
+	require.Contains(t, string(got["discussion"]), `"title":"Thread safety"`)
+	require.Contains(t, string(got["message"]), `"body":"Keep this thread safe"`)
 }

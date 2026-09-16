@@ -16,7 +16,7 @@ func TestReviewSnapshotDecodesSnakeCase(t *testing.T) {
   "comments":[{"id":"comment-example","trail_id":"trail-example","repo_id":"repo_example","review_id":"review-example","code_version_id":"cv-example","actor_id":"actor-example","status":"open","status_reason":"Needs work","stale_outcome":"current","stale_checked_at":"2026-09-01T00:01:00Z","stale_checked_code_version_id":"cv-example","client_id":"client-example","client_id_hash":"hash-example","created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:01:00Z",
    "location":{"id":"location-example","review_comment_id":"comment-example","code_version_id":"cv-example","granularity":"range","file_path":"example.go","start_line":2,"start_column":3,"end_line":4,"end_column":5,"selected_text":"old","nearby_text":"context"},
    "suggested_changes":[{"id":"change-example","review_comment_id":"comment-example","code_version_id":"cv-example","change_type":"unified_diff","patch":"patch","expected_file_path":"example.go","expected_file_hash":"blob","expected_start_line":2,"expected_end_line":4,"expected_lines":"old","created_by":"actor-example","created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:01:00Z"}],
-   "thread_id":"thread-example","thread_message_count":2,"outgoing_links":[{"source_comment_id":"comment-example","target_comment_id":"other-example","link_type":"related"}]}],
+   "discussion_id":"thread-example","discussion_message_count":2,"outgoing_links":[{"source_comment_id":"comment-example","target_comment_id":"other-example","link_type":"related"}]}],
   "next_cursor":"opaque-example","event_cursor":"42"
  }`
 	var got TrailReviewStateResponse
@@ -54,8 +54,9 @@ func TestReviewSnapshotDecodesSnakeCase(t *testing.T) {
 	require.Equal(t, 4, *change.ExpectedEndLine)
 	require.Equal(t, "actor-example", change.CreatedBy)
 	require.False(t, change.CreatedAt.IsZero())
-	require.Equal(t, "thread-example", *comment.ThreadID)
-	require.Equal(t, 2, comment.ThreadMessageCount)
+	require.NotNil(t, comment.DiscussionID)
+	require.Equal(t, "thread-example", *comment.DiscussionID)
+	require.Equal(t, 2, comment.DiscussionMessageCount)
 	require.Len(t, comment.OutgoingLinks, 1)
 	require.Equal(t, "other-example", comment.OutgoingLinks[0].TargetCommentID)
 }

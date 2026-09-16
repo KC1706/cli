@@ -28,6 +28,7 @@ func TestWatchDecodesDocumentedCellEvents(t *testing.T) {
 		{"runner.status", "runner.status resource/target-example by actor-example"},
 		{"runner.done", "runner.done resource/target-example by actor-example"},
 		{"runner.error", "runner.error resource/target-example by actor-example"},
+		{"discussion_updated", "discussion_updated resource/target-example by actor-example"},
 		{"future.event", "future.event resource/target-example by actor-example"},
 	} {
 		t.Run(tc.event, func(t *testing.T) {
@@ -68,7 +69,7 @@ func TestWatchCellRoutesPreserveReconnectCursor(t *testing.T) {
 					if r.Header.Get("Last-Event-ID") != "42" {
 						t.Errorf("Last-Event-ID = %q", r.Header.Get("Last-Event-ID"))
 					}
-					_, _ = fmt.Fprint(w, "id: 43\nevent: runner.done\ndata: {\"event_type\":\"runner.done\",\"actor_id\":\"actor-example\",\"target_type\":\"runner\",\"target_id\":\"runner-example\"}\n\nevent: forbidden\ndata: {}\n\n")
+					_, _ = fmt.Fprint(w, "id: 43\nevent: discussion_updated\ndata: {\"event_type\":\"discussion_updated\",\"actor_id\":\"actor-example\",\"target_type\":\"discussion\",\"target_id\":\"th1\",\"payload\":{\"discussion_id\":\"th1\",\"title\":\"Thread safety\"}}\n\nevent: forbidden\ndata: {}\n\n")
 				}
 			}))
 			defer srv.Close()
@@ -80,12 +81,15 @@ func TestWatchCellRoutesPreserveReconnectCursor(t *testing.T) {
 			require.Equal(t, streamCloseReconnect, reason)
 			require.Equal(t, "42", cursor)
 			require.Contains(t, out.String(), "connected to trail trail-example")
-			reason, cursor, err = streamOnce(t.Context(), client, reviewEventsPath("trail-example"), cursor, false, false, &out, &errOut)
+			out.Reset()
+			reason, cursor, err = streamOnce(t.Context(), client, reviewEventsPath("trail-example"), cursor, true, false, &out, &errOut)
 			require.NoError(t, err)
 			require.Equal(t, streamCloseForbidden, reason)
 			require.Equal(t, "43", cursor)
 			require.Equal(t, 2, requests)
-			require.Contains(t, out.String(), "runner.done runner/runner-example by actor-example")
+			var event json.RawMessage
+			require.NoError(t, json.NewDecoder(&out).Decode(&event))
+			require.JSONEq(t, `{"event":"discussion_updated","data":{"event_type":"discussion_updated","actor_id":"actor-example","target_type":"discussion","target_id":"th1","payload":{"discussion_id":"th1","title":"Thread safety"}}}`, string(event))
 		})
 	}
 }

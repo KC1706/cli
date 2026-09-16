@@ -214,9 +214,9 @@ func TestTrailWriteContracts(t *testing.T) {
 		{"update", TrailUpdateRequest{Title: &title, RequestedReviewers: &reviewers}, `{"title":"Renamed","requested_reviewers":[]}`},
 		{"clear body", TrailBodyRequest{Markdown: ""}, `{"markdown":""}`},
 		{"approve", TrailApprovalRequest{Event: "approved", Body: "Reviewed"}, `{"event":"approved","body":"Reviewed"}`},
-		{"thread", TrailThreadCreateRequest{Title: "Design", Body: "Discuss"}, `{"title":"Design","body":"Discuss"}`},
-		{"reopen", TrailThreadUpdateRequest{Resolved: &no}, `{"resolved":false}`},
-		{"message", TrailThreadMessageRequest{Body: "Reply"}, `{"body":"Reply"}`},
+		{"discussion", TrailDiscussionCreateRequest{Title: "Design", Body: "Discuss"}, `{"title":"Design","body":"Discuss"}`},
+		{"reopen", TrailDiscussionUpdateRequest{Resolved: &no}, `{"resolved":false}`},
+		{"message", TrailDiscussionMessageRequest{Body: "Reply"}, `{"body":"Reply"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

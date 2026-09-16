@@ -93,7 +93,7 @@ func TestFindingContinuationUsesOnlyExplicitFilters(t *testing.T) {
 func TestFindingJSONPreservesKeysAndReturnsNextCursor(t *testing.T) {
 	t.Parallel()
 	var comment api.TrailReviewComment
-	require.NoError(t, json.Unmarshal([]byte(`{"id":"comment-example","repo_id":"repo_example","review_id":"review-example","location":{"file_path":"example.go","start_line":2},"suggested_changes":[{"change_type":"manual_instruction","expected_file_path":"example.go"}],"outgoing_links":[{"source_comment_id":"comment-example","target_comment_id":"other-example","link_type":"related"}]}`), &comment))
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"comment-example","repo_id":"repo_example","review_id":"review-example","discussion_id":"thread-example","discussion_message_count":2,"location":{"file_path":"example.go","start_line":2},"suggested_changes":[{"change_type":"manual_instruction","expected_file_path":"example.go"}],"outgoing_links":[{"source_comment_id":"comment-example","target_comment_id":"other-example","link_type":"related"}]}`), &comment))
 	target := trailReviewTarget{Trail: api.TrailResource{OriginalBranch: "feature/example", BodyDocument: &api.TrailBodyDocument{TextSnapshot: "Description"}}}
 	for _, cursor := range []string{"opaque-next", ""} {
 		t.Run(cursor, func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestFindingJSONPreservesKeysAndReturnsNextCursor(t *testing.T) {
 				require.NotContains(t, got, "next_cursor")
 				require.JSONEq(t, `false`, string(got["has_more"]))
 			}
-			for _, key := range []string{`"repositoryId": "repo_example"`, `"reviewId": "review-example"`, `"filePath": "example.go"`, `"startLine": 2`, `"suggestedChanges"`, `"changeType": "manual_instruction"`, `"expectedFilePath": "example.go"`, `"targetCommentId": "other-example"`} {
+			for _, key := range []string{`"discussion_id": "thread-example"`, `"discussion_message_count": 2`, `"repositoryId": "repo_example"`, `"reviewId": "review-example"`, `"filePath": "example.go"`, `"startLine": 2`, `"suggestedChanges"`, `"changeType": "manual_instruction"`, `"expectedFilePath": "example.go"`, `"targetCommentId": "other-example"`} {
 				require.Contains(t, string(got["findings"]), key)
 			}
 			require.Contains(t, string(got["trail"]), `"originalBranch": "feature/example"`)

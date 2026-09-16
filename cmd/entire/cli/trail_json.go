@@ -108,47 +108,47 @@ type trailApprovalJSON struct {
 
 func toTrailApprovalJSON(v api.TrailApproval) trailApprovalJSON { return trailApprovalJSON(v) }
 
-type trailThreadsResponseJSON struct {
-	Items         []trailThreadSummaryJSON `json:"items"`
-	NextPageToken *string                  `json:"nextPageToken,omitempty"`
-	EventCursor   string                   `json:"eventCursor"`
+type trailDiscussionsResponseJSON struct {
+	Items         []trailDiscussionSummaryJSON `json:"items"`
+	NextPageToken *string                      `json:"nextPageToken,omitempty"`
+	EventCursor   string                       `json:"eventCursor"`
 }
 
-func toTrailThreadsResponseJSON(v api.TrailThreadsResponse) trailThreadsResponseJSON {
-	out := trailThreadsResponseJSON{
+func toTrailDiscussionsResponseJSON(v api.TrailDiscussionsResponse) trailDiscussionsResponseJSON {
+	out := trailDiscussionsResponseJSON{
 		NextPageToken: v.NextCursor,
 		EventCursor:   v.EventCursor,
 	}
 
 	if v.Items != nil {
-		out.Items = make([]trailThreadSummaryJSON, len(v.Items))
+		out.Items = make([]trailDiscussionSummaryJSON, len(v.Items))
 		for i := range v.Items {
-			out.Items[i] = toTrailThreadSummaryJSON(v.Items[i])
+			out.Items[i] = toTrailDiscussionSummaryJSON(v.Items[i])
 		}
 	}
 	return out
 }
 
-type trailThreadSummaryJSON struct {
-	ID                string                       `json:"id"`
-	TrailID           string                       `json:"trailId"`
-	Kind              string                       `json:"kind"` // "discussion" | "code_review"
-	Title             string                       `json:"title"`
-	ReviewCommentID   *string                      `json:"reviewCommentId"`
-	Resolved          bool                         `json:"resolved"`
-	ResolvedBy        *string                      `json:"resolvedBy"` // actor UUID
-	ResolvedAt        *time.Time                   `json:"resolvedAt"`
-	CreatedBy         *string                      `json:"createdBy"` // actor UUID
-	CreatedAt         time.Time                    `json:"createdAt"`
-	UpdatedAt         time.Time                    `json:"updatedAt"`
-	LastMessageAt     *time.Time                   `json:"lastMessageAt"`
-	LastMessageAuthor *string                      `json:"lastMessageAuthor"` // GitHub login
-	MessageCount      int                          `json:"messageCount"`
-	Participants      []trailThreadParticipantJSON `json:"participants"`
+type trailDiscussionSummaryJSON struct {
+	ID                string                           `json:"id"`
+	TrailID           string                           `json:"trailId"`
+	Kind              string                           `json:"kind"` // "discussion" | "code_review"
+	Title             string                           `json:"title"`
+	ReviewCommentID   *string                          `json:"reviewCommentId"`
+	Resolved          bool                             `json:"resolved"`
+	ResolvedBy        *string                          `json:"resolvedBy"` // actor UUID
+	ResolvedAt        *time.Time                       `json:"resolvedAt"`
+	CreatedBy         *string                          `json:"createdBy"` // actor UUID
+	CreatedAt         time.Time                        `json:"createdAt"`
+	UpdatedAt         time.Time                        `json:"updatedAt"`
+	LastMessageAt     *time.Time                       `json:"lastMessageAt"`
+	LastMessageAuthor *string                          `json:"lastMessageAuthor"` // GitHub login
+	MessageCount      int                              `json:"messageCount"`
+	Participants      []trailDiscussionParticipantJSON `json:"participants"`
 }
 
-func toTrailThreadSummaryJSON(v api.TrailThreadSummary) trailThreadSummaryJSON {
-	out := trailThreadSummaryJSON{
+func toTrailDiscussionSummaryJSON(v api.TrailDiscussionSummary) trailDiscussionSummaryJSON {
+	out := trailDiscussionSummaryJSON{
 		ID:                v.ID,
 		TrailID:           v.TrailID,
 		Kind:              v.Kind,
@@ -166,53 +166,53 @@ func toTrailThreadSummaryJSON(v api.TrailThreadSummary) trailThreadSummaryJSON {
 	}
 
 	if v.Participants != nil {
-		out.Participants = make([]trailThreadParticipantJSON, len(v.Participants))
+		out.Participants = make([]trailDiscussionParticipantJSON, len(v.Participants))
 		for i := range v.Participants {
-			out.Participants[i] = toTrailThreadParticipantJSON(v.Participants[i])
+			out.Participants[i] = toTrailDiscussionParticipantJSON(v.Participants[i])
 		}
 	}
 	return out
 }
 
-type trailThreadParticipantJSON struct {
+type trailDiscussionParticipantJSON struct {
 	Login string `json:"login"`
 }
 
-func toTrailThreadParticipantJSON(v api.TrailThreadParticipant) trailThreadParticipantJSON {
-	return trailThreadParticipantJSON(v)
+func toTrailDiscussionParticipantJSON(v api.TrailDiscussionParticipant) trailDiscussionParticipantJSON {
+	return trailDiscussionParticipantJSON(v)
 }
 
-type trailThreadDetailResponseJSON struct {
-	Thread      trailThreadSummaryJSON   `json:"thread"`
-	Messages    []trailThreadMessageJSON `json:"messages"`
-	EventCursor string                   `json:"eventCursor"`
+type trailDiscussionDetailResponseJSON struct {
+	Discussion  trailDiscussionSummaryJSON   `json:"discussion"`
+	Messages    []trailDiscussionMessageJSON `json:"messages"`
+	EventCursor string                       `json:"eventCursor"`
 }
 
-func toTrailThreadDetailResponseJSON(v api.TrailThreadDetailResponse) trailThreadDetailResponseJSON {
-	out := trailThreadDetailResponseJSON{
+func toTrailDiscussionDetailResponseJSON(v api.TrailDiscussionDetailResponse) trailDiscussionDetailResponseJSON {
+	out := trailDiscussionDetailResponseJSON{
 		EventCursor: v.EventCursor,
 	}
 
-	out.Thread = toTrailThreadSummaryJSON(v.Thread)
+	out.Discussion = toTrailDiscussionSummaryJSON(v.Discussion)
 	if v.Messages != nil {
-		out.Messages = make([]trailThreadMessageJSON, len(v.Messages))
+		out.Messages = make([]trailDiscussionMessageJSON, len(v.Messages))
 		for i := range v.Messages {
-			out.Messages[i] = toTrailThreadMessageJSON(v.Messages[i])
+			out.Messages[i] = toTrailDiscussionMessageJSON(v.Messages[i])
 		}
 	}
 	return out
 }
 
-type trailThreadMessageJSON struct {
-	ID        string                 `json:"id"`
-	Author    string                 `json:"author"` // GitHub login
-	CreatedAt time.Time              `json:"createdAt"`
-	Body      string                 `json:"body"`
-	Replies   []trailThreadReplyJSON `json:"replies"`
+type trailDiscussionMessageJSON struct {
+	ID        string                     `json:"id"`
+	Author    string                     `json:"author"` // GitHub login
+	CreatedAt time.Time                  `json:"createdAt"`
+	Body      string                     `json:"body"`
+	Replies   []trailDiscussionReplyJSON `json:"replies"`
 }
 
-func toTrailThreadMessageJSON(v api.TrailThreadMessage) trailThreadMessageJSON {
-	out := trailThreadMessageJSON{
+func toTrailDiscussionMessageJSON(v api.TrailDiscussionMessage) trailDiscussionMessageJSON {
+	out := trailDiscussionMessageJSON{
 		ID:        v.ID,
 		Author:    v.Author,
 		CreatedAt: v.CreatedAt,
@@ -220,36 +220,36 @@ func toTrailThreadMessageJSON(v api.TrailThreadMessage) trailThreadMessageJSON {
 	}
 
 	if v.Replies != nil {
-		out.Replies = make([]trailThreadReplyJSON, len(v.Replies))
+		out.Replies = make([]trailDiscussionReplyJSON, len(v.Replies))
 		for i := range v.Replies {
-			out.Replies[i] = toTrailThreadReplyJSON(v.Replies[i])
+			out.Replies[i] = toTrailDiscussionReplyJSON(v.Replies[i])
 		}
 	}
 	return out
 }
 
-type trailThreadReplyJSON struct {
+type trailDiscussionReplyJSON struct {
 	ID        string    `json:"id"`
 	Author    string    `json:"author"` // GitHub login
 	CreatedAt time.Time `json:"createdAt"`
 	Body      string    `json:"body"`
 }
 
-func toTrailThreadReplyJSON(v api.TrailThreadReply) trailThreadReplyJSON {
-	return trailThreadReplyJSON(v)
+func toTrailDiscussionReplyJSON(v api.TrailDiscussionReply) trailDiscussionReplyJSON {
+	return trailDiscussionReplyJSON(v)
 }
 
-type trailThreadCreateResponseJSON struct {
-	Thread  trailThreadSummaryJSON  `json:"thread"`
-	Message *trailThreadMessageJSON `json:"message"`
+type trailDiscussionCreateResponseJSON struct {
+	Discussion trailDiscussionSummaryJSON  `json:"discussion"`
+	Message    *trailDiscussionMessageJSON `json:"message"`
 }
 
-func toTrailThreadCreateResponseJSON(v api.TrailThreadCreateResponse) trailThreadCreateResponseJSON {
-	out := trailThreadCreateResponseJSON{}
+func toTrailDiscussionCreateResponseJSON(v api.TrailDiscussionCreateResponse) trailDiscussionCreateResponseJSON {
+	out := trailDiscussionCreateResponseJSON{}
 
-	out.Thread = toTrailThreadSummaryJSON(v.Thread)
+	out.Discussion = toTrailDiscussionSummaryJSON(v.Discussion)
 	if v.Message != nil {
-		value := toTrailThreadMessageJSON(*v.Message)
+		value := toTrailDiscussionMessageJSON(*v.Message)
 		out.Message = &value
 	}
 	return out

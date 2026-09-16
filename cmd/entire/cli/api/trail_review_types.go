@@ -73,8 +73,8 @@ type TrailReviewComment struct {
 	UpdatedAt                 time.Time                    `json:"updated_at"`
 	Location                  TrailReviewLocation          `json:"location"`
 	SuggestedChanges          []TrailReviewSuggestedChange `json:"suggested_changes,omitempty"`
-	ThreadID                  *string                      `json:"thread_id,omitempty"`
-	ThreadMessageCount        int                          `json:"thread_message_count,omitempty"`
+	DiscussionID              *string                      `json:"discussion_id,omitempty"`
+	DiscussionMessageCount    int                          `json:"discussion_message_count,omitempty"`
 	OutgoingLinks             []TrailReviewOutgoingLink    `json:"outgoing_links,omitempty"`
 }
 

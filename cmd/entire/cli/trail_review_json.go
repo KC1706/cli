@@ -30,8 +30,8 @@ type trailReviewCommentJSON struct {
 	UpdatedAt                 time.Time                        `json:"updatedAt"`
 	Location                  trailReviewLocationJSON          `json:"location"`
 	SuggestedChanges          []trailReviewSuggestedChangeJSON `json:"suggestedChanges,omitempty"`
-	ThreadID                  *string                          `json:"threadId,omitempty"`
-	ThreadMessageCount        int                              `json:"threadMessageCount,omitempty"`
+	DiscussionID              *string                          `json:"discussion_id,omitempty"`
+	DiscussionMessageCount    int                              `json:"discussion_message_count,omitempty"`
 	OutgoingLinks             []trailReviewOutgoingLinkJSON    `json:"outgoingLinks,omitempty"`
 }
 
@@ -56,8 +56,8 @@ func toTrailReviewCommentJSON(v api.TrailReviewComment) trailReviewCommentJSON {
 		ClientIDHash:              v.ClientIDHash,
 		CreatedAt:                 v.CreatedAt,
 		UpdatedAt:                 v.UpdatedAt,
-		ThreadID:                  v.ThreadID,
-		ThreadMessageCount:        v.ThreadMessageCount,
+		DiscussionID:              v.DiscussionID,
+		DiscussionMessageCount:    v.DiscussionMessageCount,
 	}
 
 	out.Location = toTrailReviewLocationJSON(v.Location)

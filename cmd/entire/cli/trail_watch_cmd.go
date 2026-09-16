@@ -493,12 +493,6 @@ func printReviewStreamEvent(w io.Writer, ev reviewStreamEvent) {
 		fmt.Fprintf(w, "%ssuggested change %s updated by %s\n", prefix, ev.TargetID, actor)
 	case "suggested_change.check_result", "suggested_change.apply_result":
 		fmt.Fprintf(w, "%s%s for %s: %s\n", prefix, ev.EventType, payloadString(ev.Payload, "suggested_change_id"), payloadString(ev.Payload, "status"))
-	case "thread.created":
-		fmt.Fprintf(w, "%sthread %s created for finding %s\n", prefix, ev.TargetID, payloadString(ev.Payload, "review_comment_id"))
-	case "thread.message_added":
-		fmt.Fprintf(w, "%sthread message %s added by %s\n", prefix, ev.TargetID, actor)
-	case "thread.message_edited":
-		fmt.Fprintf(w, "%sthread message %s edited by %s\n", prefix, ev.TargetID, actor)
 	case "comment.linked":
 		fmt.Fprintf(w, "%sfinding link created: %s → %s\n", prefix, payloadString(ev.Payload, "source_comment_id"), payloadString(ev.Payload, "target_comment_id"))
 	case "comment.unlinked":

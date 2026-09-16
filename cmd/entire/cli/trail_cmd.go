@@ -437,7 +437,7 @@ func trailWebURL(base, forge, owner, repo string, number int) string {
 // omits, by integer number. It returns only the description and etag — the
 // list result already supplies the metadata — and decodes only the fields it
 // needs, so it is unaffected by the shape of sibling fields like
-// `checkpoints`/`thread`.
+// `checkpoints`/`discussion`.
 func fetchTrailDescriptionAtPath(ctx context.Context, client *api.Client, basePath string, number int) (string, string, error) {
 	resp, err := client.Get(ctx, trailNumberPathForBase(basePath, number))
 	if err != nil {
