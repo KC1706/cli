@@ -18,8 +18,7 @@ import (
 )
 
 // SSE control events for the trail-wide event stream. Domain events
-// (for example "session.started" or "comment.created") are emitted as their
-// code_review_events.event_type values.
+// use public event names such as "review.started" or "comment.created".
 const (
 	sseEventReady     = "ready"
 	sseEventReconnect = "reconnect"
