@@ -522,12 +522,13 @@ func TestClient_Request_RespectsCallerContentType(t *testing.T) {
 	}
 }
 
-func TestCheckResponse_ErrorWithHumaDetail(t *testing.T) {
+func TestCheckResponse_ErrorWithProblemDetail(t *testing.T) {
 	t.Parallel()
 
 	resp := &http.Response{
 		StatusCode: http.StatusNotFound,
-		Body:       io.NopCloser(strings.NewReader(`{"title":"Not Found","status":404,"detail":"repository not found: a/b"}`)),
+		Header:     http.Header{"Content-Type": {"application/problem+json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"type":"https://example.test/problems/not_found","title":"Not Found","status":404,"detail":"repository not found: a/b","code":"not_found","request_id":"request-example"}`)),
 	}
 	err := CheckResponse(resp)
 	var httpErr *HTTPError

@@ -1473,7 +1473,7 @@ func encodeTrailReviewJSON(w io.Writer, target trailReviewTarget, comments []api
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(map[string]any{
-		"trail":    target.Trail,
+		"trail":    toTrailResourceJSON(target.Trail),
 		"counts":   counts,
 		"findings": comments,
 		"has_more": hasMore,

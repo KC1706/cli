@@ -11,7 +11,7 @@ import "time"
 type TrailThreadReply struct {
 	ID        string    `json:"id"`
 	Author    string    `json:"author"` // GitHub login
-	CreatedAt time.Time `json:"createdAt"`
+	CreatedAt time.Time `json:"created_at"`
 	Body      string    `json:"body"`
 }
 
@@ -19,7 +19,7 @@ type TrailThreadReply struct {
 type TrailThreadMessage struct {
 	ID        string             `json:"id"`
 	Author    string             `json:"author"` // GitHub login
-	CreatedAt time.Time          `json:"createdAt"`
+	CreatedAt time.Time          `json:"created_at"`
 	Body      string             `json:"body"`
 	Replies   []TrailThreadReply `json:"replies"`
 }
@@ -34,34 +34,34 @@ type TrailThreadParticipant struct {
 // code-review threads are surfaced through `trail finding`.
 type TrailThreadSummary struct {
 	ID                string                   `json:"id"`
-	TrailID           string                   `json:"trailId"`
+	TrailID           string                   `json:"trail_id"`
 	Kind              string                   `json:"kind"` // "discussion" | "code_review"
 	Title             string                   `json:"title"`
-	ReviewCommentID   *string                  `json:"reviewCommentId"`
+	ReviewCommentID   *string                  `json:"review_comment_id"`
 	Resolved          bool                     `json:"resolved"`
-	ResolvedBy        *string                  `json:"resolvedBy"` // actor UUID
-	ResolvedAt        *time.Time               `json:"resolvedAt"`
-	CreatedBy         *string                  `json:"createdBy"` // actor UUID
-	CreatedAt         time.Time                `json:"createdAt"`
-	UpdatedAt         time.Time                `json:"updatedAt"`
-	LastMessageAt     *time.Time               `json:"lastMessageAt"`
-	LastMessageAuthor *string                  `json:"lastMessageAuthor"` // GitHub login
-	MessageCount      int                      `json:"messageCount"`
+	ResolvedBy        *string                  `json:"resolved_by"` // actor UUID
+	ResolvedAt        *time.Time               `json:"resolved_at"`
+	CreatedBy         *string                  `json:"created_by"` // actor UUID
+	CreatedAt         time.Time                `json:"created_at"`
+	UpdatedAt         time.Time                `json:"updated_at"`
+	LastMessageAt     *time.Time               `json:"last_message_at"`
+	LastMessageAuthor *string                  `json:"last_message_author"` // GitHub login
+	MessageCount      int                      `json:"message_count"`
 	Participants      []TrailThreadParticipant `json:"participants"`
 }
 
 // TrailThreadsResponse is the response from GET .../:number/threads.
 type TrailThreadsResponse struct {
-	Items         []TrailThreadSummary `json:"items"`
-	NextPageToken *string              `json:"nextPageToken,omitempty"`
-	EventCursor   string               `json:"eventCursor"`
+	Items       []TrailThreadSummary `json:"items"`
+	NextCursor  *string              `json:"next_cursor,omitempty"`
+	EventCursor string               `json:"event_cursor"`
 }
 
 // TrailThreadDetailResponse is the response from GET .../:number/threads/:id.
 type TrailThreadDetailResponse struct {
 	Thread      TrailThreadSummary   `json:"thread"`
 	Messages    []TrailThreadMessage `json:"messages"`
-	EventCursor string               `json:"eventCursor"`
+	EventCursor string               `json:"event_cursor"`
 }
 
 // TrailThreadCreateRequest is the body for POST .../:number/threads.

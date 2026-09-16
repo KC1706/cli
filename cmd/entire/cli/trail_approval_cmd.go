@@ -189,7 +189,7 @@ func runTrailApprovals(ctx context.Context, w, errW io.Writer, insecureHTTP bool
 		if jsonOut {
 			enc := json.NewEncoder(w)
 			enc.SetIndent("", "  ")
-			return enc.Encode(out)
+			return enc.Encode(toTrailApprovalsResponseJSON(out))
 		}
 		if len(out.Approvals) == 0 {
 			fmt.Fprintf(w, "No approvals on trail #%d\n", found.Number)

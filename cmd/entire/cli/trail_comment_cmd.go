@@ -118,14 +118,14 @@ func newTrailCommentListCmd() *cobra.Command {
 }
 
 func fetchAllTrailThreads(ctx context.Context, client *api.Client, path string) ([]api.TrailThreadSummary, error) {
-	const pageSize = 100
+	const perPage = 100
 	var items []api.TrailThreadSummary
-	pageToken := ""
+	cursor := ""
 	seen := map[string]bool{}
 	for {
-		q := url.Values{"pageSize": {strconv.Itoa(pageSize)}}
-		if pageToken != "" {
-			q.Set("pageToken", pageToken)
+		q := url.Values{"per_page": {strconv.Itoa(perPage)}}
+		if cursor != "" {
+			q.Set("cursor", cursor)
 		}
 		resp, err := client.Get(ctx, path+"?"+q.Encode())
 		if err != nil {
@@ -146,14 +146,14 @@ func fetchAllTrailThreads(ctx context.Context, client *api.Client, path string) 
 			return nil, decodeErr
 		}
 		items = append(items, page.Items...)
-		if page.NextPageToken == nil || strings.TrimSpace(*page.NextPageToken) == "" {
+		if page.NextCursor == nil || strings.TrimSpace(*page.NextCursor) == "" {
 			break
 		}
-		pageToken = strings.TrimSpace(*page.NextPageToken)
-		if seen[pageToken] {
-			return nil, fmt.Errorf("thread list pagination repeated page token %q", pageToken)
+		cursor = strings.TrimSpace(*page.NextCursor)
+		if seen[cursor] {
+			return nil, fmt.Errorf("thread list pagination repeated cursor %q", cursor)
 		}
-		seen[pageToken] = true
+		seen[cursor] = true
 	}
 	return items, nil
 }
@@ -171,7 +171,7 @@ func printTrailThreads(w io.Writer, items []api.TrailThreadSummary, number int, 
 	if jsonOut {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(api.TrailThreadsResponse{Items: filtered}); err != nil {
+		if err := enc.Encode(toTrailThreadsResponseJSON(api.TrailThreadsResponse{Items: filtered})); err != nil {
 			return fmt.Errorf("encode threads JSON: %w", err)
 		}
 		return nil
@@ -226,7 +226,7 @@ func printTrailThreadDetail(w io.Writer, out api.TrailThreadDetailResponse, json
 	if jsonOut {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(out); err != nil {
+		if err := enc.Encode(toTrailThreadDetailResponseJSON(out)); err != nil {
 			return fmt.Errorf("encode thread JSON: %w", err)
 		}
 		return nil
@@ -277,7 +277,7 @@ func newTrailCommentAddCmd() *cobra.Command {
 				if jsonOut {
 					enc := json.NewEncoder(cmd.OutOrStdout())
 					enc.SetIndent("", "  ")
-					return enc.Encode(out)
+					return enc.Encode(toTrailThreadCreateResponseJSON(out))
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Created thread %s on trail #%d\n", out.Thread.ID, found.Number)
 				return nil
