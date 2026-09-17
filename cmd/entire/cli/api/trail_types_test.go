@@ -213,7 +213,8 @@ func TestTrailWriteContracts(t *testing.T) {
 	}{
 		{"update", TrailUpdateRequest{Title: &title, RequestedReviewers: &reviewers}, `{"title":"Renamed","requested_reviewers":[]}`},
 		{"clear body", TrailBodyRequest{Markdown: ""}, `{"markdown":""}`},
-		{"approve", TrailApprovalRequest{Event: "approved", Body: "Reviewed"}, `{"event":"approved","body":"Reviewed"}`},
+		{"approve", TrailApprovalRequest{Event: "approve", Body: "Reviewed"}, `{"event":"approve","body":"Reviewed"}`},
+		{"request changes", TrailApprovalRequest{Event: "request_changes", Body: "Please fix"}, `{"event":"request_changes","body":"Please fix"}`},
 		{"discussion", TrailDiscussionCreateRequest{Title: "Design", Body: "Discuss"}, `{"title":"Design","body":"Discuss"}`},
 		{"reopen", TrailDiscussionUpdateRequest{Resolved: &no}, `{"resolved":false}`},
 		{"message", TrailDiscussionMessageRequest{Body: "Reply"}, `{"body":"Reply"}`},

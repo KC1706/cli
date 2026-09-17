@@ -18,11 +18,11 @@ func trailApprovalsPath(basePath string, number int) string {
 }
 
 // buildApprovalRequest validates and constructs an approval request. A
-// REQUEST_CHANGES decision requires a non-empty message; the server enforces
+// request_changes decision requires a non-empty message; the server enforces
 // this too, but a client-side check gives a clearer error before the round trip.
 func buildApprovalRequest(event, message string) (api.TrailApprovalRequest, error) {
 	msg := strings.TrimSpace(message)
-	if event == "REQUEST_CHANGES" && msg == "" {
+	if event == "request_changes" && msg == "" {
 		return api.TrailApprovalRequest{}, errors.New("--message is required when requesting changes")
 	}
 	return api.TrailApprovalRequest{Event: event, Body: msg}, nil
@@ -105,7 +105,7 @@ The trail must be open and have a linked branch.`,
 				return err
 			}
 			return submitTrailApproval(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), trailInsecureHTTP(cmd),
-				trailRepoFlag(cmd), selectorFromArgs(args), branch, "APPROVE", message, "Approved")
+				trailRepoFlag(cmd), selectorFromArgs(args), branch, "approve", message, "Approved")
 		},
 	}
 	cmd.Flags().StringVarP(&message, "message", "m", "", "Optional approval comment")
@@ -128,7 +128,7 @@ A reason (--message) is required. The trail must be open and have a linked branc
 				return err
 			}
 			return submitTrailApproval(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), trailInsecureHTTP(cmd),
-				trailRepoFlag(cmd), selectorFromArgs(args), branch, "REQUEST_CHANGES", message, "Requested changes on")
+				trailRepoFlag(cmd), selectorFromArgs(args), branch, "request_changes", message, "Requested changes on")
 		},
 	}
 	cmd.Flags().StringVarP(&message, "message", "m", "", "Reason for requesting changes (required)")
