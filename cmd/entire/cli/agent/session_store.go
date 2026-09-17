@@ -115,8 +115,11 @@ func (s *SessionStore) openRoot() (*os.Root, error) {
 // routinely lives under a symlinked ~/.claude or ~/.codex. What IS enforced is
 // everything below it — see WriteFile, which creates nested directories with
 // MkdirAllNoSymlink and refuses a symlinked leaf.
+// 0700, not 0750: this directory holds session transcripts. It matches what
+// the resume path used to create it with before that MkdirAll was removed as
+// redundant, and a no-op when the agent already made the directory itself.
 func (s *SessionStore) openRootForWrite() (*os.Root, error) {
-	if err := os.MkdirAll(s.dir, 0o750); err != nil {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
 	return s.openRoot()

@@ -360,3 +360,27 @@ func TestValidateAgentSessionID(t *testing.T) {
 		}
 	}
 }
+
+// A separator inside a "component" is rejected, not split on. The exported name
+// invites a caller that has not split first, and every traversal below passes
+// the other rules: "../x" is clean, and "../.." trips only the trailing-period
+// check, so the gap survives a casual smoke test.
+func TestValidateFileNameComponentRejectsSeparators(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"/etc/passwd",
+		"../x",
+		"sub/../../../etc",
+		`..\..\windows`,
+		`sub\child`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := ValidateFileNameComponent(name); err == nil {
+				t.Errorf("ValidateFileNameComponent(%q) = nil, want error", name)
+			}
+		})
+	}
+}

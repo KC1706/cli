@@ -19,9 +19,18 @@ var windowsReservedDeviceNameRegex = regexp.MustCompile(`(?i)^(?:con|prn|aux|nul
 // ValidateFileNameComponent rejects names whose meaning can change when used as
 // one filesystem component on a supported platform. It deliberately does not
 // apply identifier-only rules such as rejecting leading dashes or glob syntax.
+//
+// ONE component: a separator is rejected rather than split on. Callers do the
+// splitting, and a validator that silently accepted "sub/../../../etc" because
+// its only caller happened to split first is a trap for the second caller —
+// note that "../x" passes every other rule here, and "../.." is caught only by
+// the trailing-period check, so the mistake survives a casual smoke test.
 func ValidateFileNameComponent(name string) error {
 	if name == "" {
 		return errors.New("file name component cannot be empty")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("invalid file name component %q: contains path separators", name)
 	}
 	if strings.Contains(name, ":") {
 		return fmt.Errorf("invalid file name component %q: contains volume separator", name)
