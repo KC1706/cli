@@ -96,19 +96,19 @@ func TestCompareAndSwapRef_SymbolicRefAbortFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("abort failure injection requires POSIX signals")
 	}
-	for _, backend := range refCASBackends() {
-		t.Run(backend.name, func(t *testing.T) {
-			t.Parallel()
-			repoDir, initial, replacement := backend.init(t)
-			hooksDir := t.TempDir()
-			// Fail the owned Git process after it releases the prepared ref lock.
-			hook := `#!/bin/sh
+	hooksDir := t.TempDir()
+	// Fail the owned Git process after it releases the prepared ref lock.
+	hook := `#!/bin/sh
 if [ "$1" = aborted ]; then
     echo 'fatal: cannot lock references' >&2
     kill -TERM "$PPID"
 fi
 `
-			require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "reference-transaction"), []byte(hook), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "reference-transaction"), []byte(hook), 0o755))
+	for _, backend := range refCASBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			t.Parallel()
+			repoDir, initial, replacement := backend.init(t)
 			gitenv.Run(t, repoDir, "config", "core.hooksPath", hooksDir)
 
 			err := CompareAndSwapRef(t.Context(), repoDir, plumbing.HEAD, plumbing.NewHash(initial), plumbing.NewHash(replacement))
