@@ -1,0 +1,248 @@
+//go:build e2e
+
+package controlplane
+
+import (
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/entireio/cli/e2e/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// nativeMirrorSeedTimeout bounds the wait for a seed, which is a full git sync.
+// Small repos have been observed ready in 40s-2m; the CLI is given less than
+// the harness so a slow seed surfaces as the command's own message rather than
+// as a killed process.
+const (
+	nativeMirrorSeedTimeout = 10 * time.Minute
+	nativeMirrorStepTimeout = 12 * time.Minute
+)
+
+type clusterJSON struct {
+	Slug         string `json:"slug"`
+	Jurisdiction string `json:"jurisdiction"`
+	Host         string `json:"host"`
+}
+
+type placementJSON struct {
+	Cluster  string `json:"cluster"`
+	Status   string `json:"status"`
+	Role     string `json:"role"`
+	Stage    string `json:"stage"`
+	Removing bool   `json:"removing"`
+	CloneURL string `json:"cloneUrl"`
+}
+
+type repoDirJSON struct {
+	Repo       string          `json:"repo"`
+	Placements []placementJSON `json:"placements"`
+}
+
+// TestControlPlane_NativeMirrorLifecycle drives a native repo through the whole
+// mirror surface: see where it lives, place a read-only replica in another
+// region, clone from it, repoint a git remote at it, and tear it back down.
+//
+// Phases are ordered subtests sharing one repo — the suite is serial against a
+// single account, and a seed is too slow to pay for more than once. Each phase
+// skips when an earlier one failed, so a single real failure does not read as
+// six.
+//
+// Not parallel: the suite shares one test account.
+func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	sweepLeaked(t, dir)
+	name := fmt.Sprintf("%s%d", namePrefix, time.Now().Unix())
+	ref := "/et/" + name + "/" + name
+
+	// Each cleanup is registered as soon as the create returns, by name, so a
+	// create that succeeds but prints unusable JSON still gets deleted.
+	stdout, _ := mustRunEntire(t, dir, "org", "create", name, "--json")
+	orgRef := name
+	t.Cleanup(func() { deleteResource(t, dir, "org", orgRef) })
+	org := decodeJSON[struct {
+		ID string `json:"id"`
+	}](t, stdout)
+	require.NotEmpty(t, org.ID)
+	orgRef = org.ID
+
+	stdout, _ = mustRunEntire(t, dir, "project", "create", name, "--owner", org.ID, "--json")
+	projectRef := name
+	t.Cleanup(func() { deleteResource(t, dir, "project", projectRef) })
+	project := decodeJSON[struct {
+		ID string `json:"id"`
+	}](t, stdout)
+	require.NotEmpty(t, project.ID)
+	projectRef = project.ID
+
+	stdout, _ = mustRunEntire(t, dir, "repo", "create", name, "--project", project.ID, "--json")
+	repoRef := ref
+	t.Cleanup(func() { deleteResource(t, dir, "repo", repoRef) })
+	created := decodeJSON[repoJSON](t, stdout)
+	require.NotEmpty(t, created.ID)
+	repoRef = created.ID
+
+	repo := waitForRepoClonable(t, dir, ref)
+	require.NotEmpty(t, repo.ClusterSlug, "a provisioned repo names its primary cluster")
+
+	// A native mirror goes in a region other than the repo's own, so the target
+	// is read from the catalog rather than hardcoded: the account's home region
+	// is not this test's to assume.
+	target := pickForeignCluster(t, dir, repo)
+	t.Logf("repo %s is primary on %s (%s); mirroring to %s (%s)", ref, repo.ClusterSlug, repo.Jurisdiction, target.Slug, target.Jurisdiction)
+
+	phase := func(label string, fn func(t *testing.T)) {
+		if t.Failed() {
+			t.Run(label, func(t *testing.T) { t.Skip("an earlier phase failed") })
+			return
+		}
+		t.Run(label, fn)
+	}
+
+	phase("before: only the primary is listed", func(t *testing.T) {
+		stdout, _ := mustRunEntire(t, dir, "repo", "mirror", "get", ref, "--json")
+		row := decodeJSON[repoDirJSON](t, stdout)
+		require.Equal(t, ref, row.Repo)
+		require.Len(t, row.Placements, 1, "a fresh repo has only its primary")
+		require.Equal(t, "primary", row.Placements[0].Role)
+		require.Equal(t, repo.ClusterSlug, row.Placements[0].Cluster)
+	})
+
+	phase("the forge filter decides which directory the repo is in", func(t *testing.T) {
+		native, _ := mustRunEntire(t, dir, "repo", "mirror", "list", "--forge", "et", "--all", "--json")
+		require.Contains(t, native, ref, "--forge et lists native repos by their forge-qualified ref")
+
+		gh, _ := mustRunEntire(t, dir, "repo", "mirror", "list", "--all", "--json")
+		require.NotContains(t, gh, ref, "the default view is GitHub and must not change")
+	})
+
+	phase("refusals cost no write", func(t *testing.T) {
+		// Every case must fail before anything is created, which is why they run
+		// against a repo whose placements are known to be exactly the primary.
+		for _, tc := range []struct {
+			name string
+			args []string
+			want string
+		}{
+			{"the repo's own cluster is its primary", []string{"mirror", "add", ref, "--cluster", repo.ClusterSlug}, "primary"},
+			{"a host is not a cluster slug", []string{"mirror", "add", ref, "--cluster", target.Host}, "not a cluster slug"},
+			{"an unknown cluster names the known ones", []string{"mirror", "add", ref, "--cluster", "no-such-cluster"}, "unknown cluster"},
+			{"removing the primary is repo delete", []string{"mirror", "remove", ref, "--cluster", repo.ClusterSlug}, "entire repo delete"},
+			{"a bare pair names no forge", []string{"mirror", "add", name + "/" + name}, "must name its forge"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, stderr, err := runEntire(t, dir, append([]string{"repo"}, tc.args...)...)
+				require.Error(t, err)
+				require.Contains(t, stderr, tc.want)
+			})
+		}
+	})
+
+	var cloneURL string
+	phase("add places a replica and waits for it to be readable", func(t *testing.T) {
+		stdout, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout,
+			"repo", "mirror", "add", ref, "--cluster", target.Slug, "--timeout", nativeMirrorSeedTimeout.String())
+		require.NoError(t, err, "stdout:\n%s\nstderr:\n%s", stdout, stderr)
+		// Registered right after the create, so it runs BEFORE the repo delete
+		// that was registered earlier (cleanups are LIFO).
+		t.Cleanup(func() {
+			_, _, _ = runEntireWithTimeout(t, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Slug)
+		})
+		cloneURL = "entire://" + target.Host + ref
+		require.Contains(t, stdout, cloneURL, "a ready mirror prints the URL to clone it from")
+		require.Contains(t, stdout, "read-only", "the one thing a mirror cannot do is stated")
+	})
+
+	phase("get shows the primary and the mirror, each by role", func(t *testing.T) {
+		stdout, _ := mustRunEntire(t, dir, "repo", "mirror", "get", ref, "--json")
+		row := decodeJSON[repoDirJSON](t, stdout)
+		require.Len(t, row.Placements, 2)
+		require.Equal(t, "primary", row.Placements[0].Role)
+		byCluster := map[string]placementJSON{}
+		for _, p := range row.Placements {
+			byCluster[p.Cluster] = p
+		}
+		mirror, ok := byCluster[target.Slug]
+		require.True(t, ok, "the mirror is listed under the cluster it was placed on")
+		require.Equal(t, "native_mirror", mirror.Role)
+		require.Equal(t, "ready", mirror.Status)
+		require.False(t, mirror.Removing)
+		require.Equal(t, cloneURL, mirror.CloneURL)
+	})
+
+	phase("add is idempotent and says so", func(t *testing.T) {
+		stdout, stderr := mustRunEntire(t, dir, "repo", "mirror", "add", ref, "--cluster", target.Slug, "--no-wait")
+		require.Contains(t, stderr, "already placed", "a second add must not read as a fresh create")
+		require.NotContains(t, stderr, "Placing")
+		_ = stdout
+	})
+
+	clone := filepath.Join(dir, "from-mirror")
+	phase("the mirror clones from the active login", func(t *testing.T) {
+		// Whether a cross-jurisdiction clone needs a login in the mirror's own
+		// region is COR-1043; the note predates the 421-following transport, so
+		// this asserts the behaviour rather than assuming either answer.
+		_, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout, "repo", "clone", cloneURL, clone)
+		require.NoError(t, err, "cloning a mirror with the home-region login failed; if this is COR-1043, record it: %s", stderr)
+	})
+
+	phase("remote use fetches from the mirror and pushes to the primary", func(t *testing.T) {
+		_, stderr, err := runEntire(t, clone, "repo", "remote", "use", "--cluster", target.Slug)
+		require.NoError(t, err, stderr)
+		remotes := testutil.GitOutput(t, clone, "remote", "-v")
+		primaryURL := "entire://" + repo.ClusterHost + ref
+		assert.Contains(t, remotes, "origin\t"+cloneURL+" (fetch)")
+		assert.Contains(t, remotes, "origin\t"+primaryURL+" (push)",
+			"a mirror is read-only, so pushes must still reach the primary")
+	})
+
+	phase("remove tears the replica down", func(t *testing.T) {
+		stdout, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Slug)
+		require.NoError(t, err, stderr)
+		require.Contains(t, stdout, "Removed the mirror")
+
+		after, _ := mustRunEntire(t, dir, "repo", "mirror", "get", ref, "--json")
+		row := decodeJSON[repoDirJSON](t, after)
+		require.Len(t, row.Placements, 1, "only the primary is left")
+		require.Equal(t, "primary", row.Placements[0].Role)
+	})
+
+	// The server refuses to delete a project with repos or an org with projects.
+	assertDeleted(t, dir, "repo", created.ID)
+	assertDeleted(t, dir, "project", project.ID)
+	assertDeleted(t, dir, "org", org.ID)
+}
+
+// pickForeignCluster returns a cluster outside the repo's own region, which is
+// the only kind a native mirror may be placed on. Reading it from the catalog
+// rather than hardcoding a pair keeps the test working wherever the account's
+// repos land.
+func pickForeignCluster(t *testing.T, dir string, repo repoJSON) clusterJSON {
+	t.Helper()
+	stdout, _ := mustRunEntire(t, dir, "cluster", "list", "--json")
+	var clusters []clusterJSON
+	require.NoError(t, json.Unmarshal([]byte(stdout), &clusters), "stdout is not JSON:\n%s", stdout)
+	for _, cl := range clusters {
+		if cl.Jurisdiction != repo.Jurisdiction && cl.Host != "" {
+			return cl
+		}
+	}
+	t.Fatalf("no cluster outside %s to mirror into; catalog: %s", repo.Jurisdiction, stdout)
+	return clusterJSON{}
+}
+
+// TestControlPlane_RepoCreateRejectsClusterHost pins that a repo's home cluster
+// is not the caller's to choose: it is the primary cell of the owning project's
+// region. Flag parsing fails before any network call, so this creates nothing.
+func TestControlPlane_RepoCreateRejectsClusterHost(t *testing.T) {
+	_, stderr, err := runEntire(t, t.TempDir(), "repo", "create", "irrelevant",
+		"--project", "irrelevant", "--cluster-host", "aws-us-east-2.entire.io")
+	require.Error(t, err)
+	require.True(t, strings.Contains(stderr, "unknown flag") && strings.Contains(stderr, "cluster-host"),
+		"expected an unknown-flag error, got:\n%s", stderr)
+}

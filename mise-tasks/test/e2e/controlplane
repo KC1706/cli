@@ -30,7 +30,7 @@ filter="${usage_filter:-}"
 # resources on the shared test account.
 gotestsum --format dots --packages=./e2e/controlplane \
   --jsonfile "$E2E_ARTIFACT_DIR/test-events.json" -- \
-  -tags=e2e -count=1 -timeout=20m \
+  -tags=e2e -count=1 -timeout=40m \
   ${filter:+-run "$filter"} || rc=$?
 
 go run ./e2e/cmd/testreport -color -o "$E2E_ARTIFACT_DIR/report.txt" "$E2E_ARTIFACT_DIR/test-events.json"
