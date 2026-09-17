@@ -495,3 +495,45 @@ func TestMaybeRunPlugin_UnlistedNameIsNotOffered(t *testing.T) { //nolint:parall
 		t.Errorf("missing diagnosis: %q", stderr.String())
 	}
 }
+
+// TestMaybeRunPlugin_MissingInvestigateNonInteractive pins that `investigate`
+// gets the same on-demand treatment as `graph`.
+//
+// It was a built-in until it moved to the entire-investigate plugin, so a user
+// typing it has every reason to expect the command to exist; falling through
+// to Cobra would answer an established command with "unknown command for
+// entire" and no way forward.
+func TestMaybeRunPlugin_MissingInvestigateNonInteractive(t *testing.T) { //nolint:paralleltest // isolates PATH and terminal detection
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("ENTIRE_TEST_TTY", "0")
+	withPluginDir(t)
+	root := newTestRoot()
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+
+	handled, code, _ := MaybeRunPlugin(t.Context(), root, []string{"investigate", "--findings"})
+	if !handled || code != 1 {
+		t.Fatalf("handled=%v code=%d, want true, 1", handled, code)
+	}
+	if !strings.Contains(stderr.String(), "entire plugin install investigate") {
+		t.Fatalf("missing installation hint: %q", stderr.String())
+	}
+}
+
+// TestOffersOnDemandInstall_IsNarrow pins that the offer is not extended to
+// arbitrary names. The prompt defaults to Yes and ends in a downloaded binary
+// linked onto $PATH, so it belongs only to names this CLI previously answered
+// itself.
+func TestOffersOnDemandInstall_IsNarrow(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"graph", "investigate"} {
+		if !offersOnDemandInstall(name) {
+			t.Errorf("offersOnDemandInstall(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"run", "upgrade", "brain", "ci", "definitely-not-a-plugin", ""} {
+		if offersOnDemandInstall(name) {
+			t.Errorf("offersOnDemandInstall(%q) = true, want false", name)
+		}
+	}
+}
