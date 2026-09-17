@@ -56,7 +56,7 @@ func TestSessionStore_SessionFileRejectsEscapingSessionID(t *testing.T) {
 
 	store, _ := newStore(t, joinResolve)
 	_, _, err := store.SessionFile("../../escaped")
-	require.ErrorIs(t, err, agent.ErrOutsideSessionStore)
+	require.ErrorIs(t, err, agent.ErrUnsafeSessionName)
 }
 
 func TestSessionStore_SessionFileRejectsUnsafeIDBeforeResolver(t *testing.T) {
@@ -72,7 +72,7 @@ func TestSessionStore_SessionFileRejectsUnsafeIDBeforeResolver(t *testing.T) {
 				return joinResolve(dir, id)
 			})
 			_, _, err := store.SessionFile(sessionID)
-			require.ErrorIs(t, err, agent.ErrOutsideSessionStore)
+			require.ErrorIs(t, err, agent.ErrUnsafeSessionName)
 			assert.False(t, resolverCalled, "unsafe ID must not reach the agent resolver")
 		})
 	}
@@ -129,7 +129,7 @@ func TestSessionStore_FollowsSymlinkedStoreRoot(t *testing.T) {
 	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ValidateWritePath("session.jsonl"))
+	require.NoError(t, store.ValidateExternalWriteRef("session.jsonl"))
 	require.NoError(t, store.WriteFile("session.jsonl", []byte("hi\n"), 0o600))
 	assert.FileExists(t, filepath.Join(realStore, "session.jsonl"))
 }
@@ -164,19 +164,19 @@ func TestSessionStore_ExistsReportsDanglingSymlink(t *testing.T) {
 	assert.True(t, store.Exists("a.jsonl"))
 }
 
-func TestSessionStore_ValidateWritePathAllowsMissingStore(t *testing.T) {
+func TestSessionStore_ValidateExternalWriteRefAllowsMissingStore(t *testing.T) {
 	t.Parallel()
 
 	storeDir := filepath.Join(t.TempDir(), "missing-store")
 	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ValidateWritePath("session.jsonl"))
+	require.NoError(t, store.ValidateExternalWriteRef("session.jsonl"))
 	_, err = os.Stat(storeDir)
 	assert.True(t, os.IsNotExist(err), "validation must not create the missing store")
 }
 
-func TestSessionStore_ValidateWritePathRejectsUnsafeNameWithMissingStore(t *testing.T) {
+func TestSessionStore_ValidateExternalWriteRefRejectsUnsafeNameWithMissingStore(t *testing.T) {
 	t.Parallel()
 
 	storeDir := filepath.Join(t.TempDir(), "missing-store")
@@ -190,7 +190,7 @@ func TestSessionStore_ValidateWritePathRejectsUnsafeNameWithMissingStore(t *test
 		filepath.Join("CON", "session.jsonl"),
 		filepath.Join("nul.jsonl", "session.jsonl"),
 	} {
-		require.Error(t, store.ValidateWritePath(name), name)
+		require.Error(t, store.ValidateExternalWriteRef(name), name)
 	}
 	_, err = os.Stat(storeDir)
 	assert.True(t, os.IsNotExist(err), "validation must not create the missing store")

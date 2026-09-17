@@ -32,9 +32,6 @@ func ValidateFileNameComponent(name string) error {
 	if strings.ContainsAny(name, `/\`) {
 		return fmt.Errorf("invalid file name component %q: contains path separators", name)
 	}
-	if strings.Contains(name, ":") {
-		return fmt.Errorf("invalid file name component %q: contains volume separator", name)
-	}
 	if reason := unsafeFileNameComponentReason(name); reason != "" {
 		return fmt.Errorf("invalid file name component %q: %s", name, reason)
 	}
@@ -43,6 +40,12 @@ func ValidateFileNameComponent(name string) error {
 
 func unsafeFileNameComponentReason(name string) string {
 	switch {
+	// First, matching the order this helper replaced in ValidateFileNameComponent.
+	// A drive-relative path like "C:foo" is separator-free and filepath.IsAbs
+	// reports it as non-absolute, yet filepath.Join discards the base directory
+	// when the appended element carries a volume — so on Windows it escapes.
+	case strings.Contains(name, ":"):
+		return "contains volume separator"
 	case strings.ContainsFunc(name, func(r rune) bool { return r <= '\x1f' || r == '\x7f' }):
 		return "contains control character"
 	case name == "." || name == "..":
@@ -69,21 +72,17 @@ func ValidateSessionID(id string) error {
 	if trimmed != id {
 		return fmt.Errorf("invalid session ID %q: contains surrounding whitespace", id)
 	}
+	// Before the shared reason helper: "C:\\Windows\\System32" trips both the
+	// separator rule and the volume-separator rule, and naming the separators is
+	// the more useful of the two answers.
+	if strings.ContainsAny(id, "/\\") {
+		return fmt.Errorf("invalid session ID %q: contains path separators", id)
+	}
 	if reason := unsafeFileNameComponentReason(id); reason != "" {
 		return fmt.Errorf("invalid session ID %q: %s", id, reason)
 	}
 	if strings.HasPrefix(id, "-") {
 		return fmt.Errorf("invalid session ID %q: starts with dash", id)
-	}
-	if strings.ContainsAny(id, "/\\") {
-		return fmt.Errorf("invalid session ID %q: contains path separators", id)
-	}
-	// Reject the Windows volume separator. A drive-relative path like "C:foo" is
-	// separator-free and filepath.IsAbs reports it as non-absolute, yet
-	// filepath.Join discards the base directory when the appended element
-	// carries a volume name — escaping the intended directory on Windows.
-	if strings.Contains(id, ":") {
-		return fmt.Errorf("invalid session ID %q: contains volume separator", id)
 	}
 	// Reject glob metacharacters. Session IDs are interpolated into
 	// filepath.Glob patterns in several places (agent transcript lookup,

@@ -46,6 +46,17 @@ type SessionLocator interface {
 // agent's session directory. Callers match it with errors.Is.
 var ErrOutsideSessionStore = errors.New("path is outside the agent's session directory")
 
+// ErrUnsafeSessionName reports a name that is malformed as a filesystem
+// component — a traversal segment, a control character, a trailing space or
+// period, a Windows device name or volume separator.
+//
+// Separate from ErrOutsideSessionStore on purpose: that one says a path
+// resolved OUT of the store, which is a containment failure, and reporting it
+// for a merely malformed ID produced "path is outside the agent's session
+// directory: invalid session ID \"session.\": ends with period", which names
+// the wrong problem. Callers match either with errors.Is.
+var ErrUnsafeSessionName = errors.New("unsafe session file name")
+
 // OpenSessionStore returns ag's session store for repoPath.
 //
 // The directory need NOT exist yet: resolving a session file is path arithmetic
@@ -135,7 +146,7 @@ func (s *SessionStore) openRootForWrite() (*os.Root, error) {
 // which a plain filepath.Join would have produced silently.
 func (s *SessionStore) SessionFile(agentSessionID string) (name, absPath string, err error) {
 	if err := validation.ValidateSessionID(agentSessionID); err != nil {
-		return "", "", fmt.Errorf("resolve session file: %w: %w", ErrOutsideSessionStore, err)
+		return "", "", fmt.Errorf("resolve session file: %w: %w", ErrUnsafeSessionName, err)
 	}
 	resolved := s.agent.ResolveSessionFile(s.dir, agentSessionID)
 	name, err = s.Name(resolved)
@@ -161,8 +172,8 @@ func (s *SessionStore) Name(p string) (string, error) {
 	// which is the answer this containment check exists to give. No-op on Unix,
 	// where VolumeName is always empty.
 	if !filepath.IsAbs(p) && filepath.VolumeName(p) == "" {
-		cleaned := filepath.ToSlash(filepath.Clean(filepath.FromSlash(p)))
-		if cleaned == "." || paths.IsRelativeTraversal(cleaned) {
+		cleaned := cleanRelativeName(p)
+		if relativeNameEscapes(cleaned) {
 			return "", fmt.Errorf("%w: %s", ErrOutsideSessionStore, p)
 		}
 		return cleaned, nil
@@ -174,14 +185,82 @@ func (s *SessionStore) Name(p string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// ValidateWritePath rejects an unsafe component in name and a symlink at name
+func cleanRelativeName(p string) string {
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(p)))
+}
+
+// relativeNameEscapes reports whether an already-cleaned relative name leaves
+// its own base. One implementation, shared by Name and by the external-agent
+// preflight, which has no store to resolve against and used to carry a copy.
+func relativeNameEscapes(cleaned string) bool {
+	return cleaned == "." || paths.IsRelativeTraversal(cleaned)
+}
+
+// SessionRefIsFilesystemPath reports whether ref is unambiguously a filesystem
+// path rather than an agent-defined opaque key.
+func SessionRefIsFilesystemPath(ref string) bool {
+	return filepath.IsAbs(ref) || filepath.VolumeName(ref) != ""
+}
+
+// ValidateExternalSessionRef applies every rule on an external agent's
+// session_ref that needs no session store, and reports whether ref is
+// filesystem-shaped — that is, whether the caller must also run
+// (*SessionStore).ValidateExternalWriteRef against the agent's store.
+//
+// The protocol leaves session_ref agent-defined, so a relative value may be an
+// opaque key (a database row, a tenant-scoped identifier) and is forwarded as
+// given. Two rules still apply to it: it must not be rooted, and it must not
+// lexically escape its own base.
+//
+// Deliberately independent of RepoPath. The store-backed half needs a repo to
+// resolve a session directory; these rules do not, and gating them on a field
+// both current callers happen to set is a check that disappears for the next
+// caller that does not.
+func ValidateExternalSessionRef(ref string) (filesystemPath bool, err error) {
+	if ref == "" {
+		return false, nil
+	}
+	if SessionRefIsFilesystemPath(ref) {
+		// A dot component survives no round trip through a plugin that joins or
+		// normalizes it, so it is refused rather than cleaned away here.
+		for _, component := range strings.Split(filepath.ToSlash(ref), "/") {
+			if component == "." || component == ".." {
+				return false, fmt.Errorf("%w: %s contains a dot path component", ErrOutsideSessionStore, ref)
+			}
+		}
+		return true, nil
+	}
+	if os.IsPathSeparator(ref[0]) {
+		return false, fmt.Errorf("%w: %s is rooted", ErrOutsideSessionStore, ref)
+	}
+	if relativeNameEscapes(cleanRelativeName(ref)) {
+		return false, fmt.Errorf("%w: %s escapes its relative base", ErrOutsideSessionStore, ref)
+	}
+	return false, nil
+}
+
+// ValidateExternalWriteRef is the store-backed half of the preflight: it
+// resolves ref as a name inside the store and checks that name. Callers pass a
+// ref that ValidateExternalSessionRef reported as filesystem-shaped.
+//
+// The Name-then-check order is WriteFile's own prologue and stays here rather
+// than in every caller.
+func (s *SessionStore) ValidateExternalWriteRef(ref string) error {
+	name, err := s.Name(ref)
+	if err != nil {
+		return err
+	}
+	return s.validateWritePath(name)
+}
+
+// validateWritePath rejects an unsafe component in name and a symlink at name
 // itself. A missing store is allowed because the external agent may create it.
 //
 // This is a point-in-time preflight for a path handed to an external
 // subprocess, not a containment boundary: the subprocess can race it, and the
 // store's own location is the agent's to choose. Built-in writes go through
 // WriteFile, which repeats the name check and then writes through an os.Root.
-func (s *SessionStore) ValidateWritePath(name string) error {
+func (s *SessionStore) validateWritePath(name string) error {
 	if err := validateWriteName(name); err != nil {
 		return err
 	}
@@ -208,10 +287,13 @@ func (s *SessionStore) ValidateWritePath(name string) error {
 	return nil
 }
 
+// validateWriteName checks each component of name. Lexical only — it touches no
+// filesystem, which is why it reports ErrUnsafeSessionName rather than the
+// containment sentinel.
 func validateWriteName(name string) error {
 	for _, component := range strings.Split(filepath.ToSlash(name), "/") {
 		if err := validation.ValidateFileNameComponent(component); err != nil {
-			return fmt.Errorf("inspect session write path: %w: %w", ErrOutsideSessionStore, err)
+			return fmt.Errorf("validate session file name: %w: %w", ErrUnsafeSessionName, err)
 		}
 	}
 	return nil

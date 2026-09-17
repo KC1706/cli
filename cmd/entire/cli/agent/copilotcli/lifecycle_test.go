@@ -234,7 +234,7 @@ func TestParseHookEvent_UnsafeSessionIDSkipsTranscriptReads(t *testing.T) {
 	transcriptPath := filepath.Join(sessionDir, unsafeSessionID, "events.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o750))
 	require.NoError(t, os.WriteFile(transcriptPath, []byte(strings.Join([]string{
-		`{"type":"session.model_change","data":{"newModel":"should-not-be-read"}}`,
+		`{"type":"session.model_change","data":{"newModel":"claude-sonnet-5"}}`,
 		`{"type":"subagent.started","agentId":"` + childID + `","data":{"toolCallId":"toolu_unsafe","agentType":"general-purpose"}}`,
 	}, "\n")), 0o600))
 	hookInput := func(fields map[string]any) string {
@@ -243,7 +243,12 @@ func TestParseHookEvent_UnsafeSessionIDSkipsTranscriptReads(t *testing.T) {
 		return string(raw)
 	}
 
-	t.Run("agent stop", func(t *testing.T) {
+	// Model extraction reads transcriptPath and never touches the session ID, so
+	// an unsafe ID does not suppress it — gating it on the ID only dropped model
+	// attribution for an odd-looking session, while anyone able to set a hostile
+	// transcriptPath sends a UUID-shaped sessionId beside it. The unsafe ID is
+	// refused by DispatchLifecycleEvent before any handler runs.
+	t.Run("agent stop reads the model regardless of the session ID", func(t *testing.T) {
 		input := hookInput(map[string]any{
 			"timestamp": 1771480085412, "cwd": "/repo", "sessionId": unsafeSessionID,
 			"transcriptPath": transcriptPath, "stopReason": "end_turn",
@@ -252,9 +257,11 @@ func TestParseHookEvent_UnsafeSessionIDSkipsTranscriptReads(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, event)
 		require.Equal(t, agent.TurnEnd, event.Type)
-		require.Empty(t, event.Model)
+		require.Equal(t, "claude-sonnet-5", event.Model)
 	})
 
+	// Subagent evidence is the real case: it resolves the parent transcript
+	// through the store, so an unsafe ID stops it.
 	t.Run("subagent stop", func(t *testing.T) {
 		input := hookInput(map[string]any{
 			"timestamp": 1771480085412, "cwd": "/repo", "sessionId": unsafeSessionID,

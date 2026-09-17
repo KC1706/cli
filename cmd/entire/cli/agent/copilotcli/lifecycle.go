@@ -149,13 +149,11 @@ func (c *CopilotCLIAgent) buildSessionStart(env *hookEnvelope) *agent.Event {
 }
 
 func (c *CopilotCLIAgent) buildAgentStop(ctx context.Context, env *hookEnvelope) *agent.Event {
-	sessionIDIsSafe := validation.ValidateSessionID(env.SessionID) == nil
-
 	// Current Copilot children emit their own agentStop with the child UUID as
 	// sessionId but the parent's transcriptPath. A child userPromptSubmitted may
 	// already have created transient Entire state; end that state without
 	// scanning the parent transcript as if it belonged to the child.
-	if sessionIDIsSafe && c.isSubagentAgentStop(env) {
+	if c.isSubagentAgentStop(env) {
 		return &agent.Event{
 			Type:      agent.SessionEnd,
 			SessionID: env.SessionID,
@@ -164,7 +162,7 @@ func (c *CopilotCLIAgent) buildAgentStop(ctx context.Context, env *hookEnvelope)
 	}
 
 	var model string
-	if sessionIDIsSafe && env.TranscriptPath != "" {
+	if env.TranscriptPath != "" {
 		model = ExtractModelFromTranscript(ctx, env.TranscriptPath)
 	}
 
@@ -285,10 +283,20 @@ func (c *CopilotCLIAgent) readHookEnvelope(stdin io.Reader) (*hookEnvelope, erro
 func (c *CopilotCLIAgent) resolveTranscriptRef(ctx context.Context, sessionID string) string {
 	// GetSessionDir ignores the repoPath parameter for Copilot CLI since session
 	// state is always in ~/.copilot/session-state/ (not repo-specific).
-	sessionDir, err := c.GetSessionDir("")
+	//
+	// Through the store, not c.ResolveSessionFile directly: sessionID is the raw
+	// hook payload's, Copilot's resolver puts it in a DIRECTORY position, and
+	// SessionFile is where that ID is validated and the result confirmed to be
+	// inside the store. See the contract on agent.Agent.ResolveSessionFile.
+	store, err := agent.OpenSessionStore(c, "")
 	if err != nil {
 		logging.Warn(ctx, "copilot-cli: failed to resolve transcript path", "sessionID", sessionID, "err", err)
 		return ""
 	}
-	return c.ResolveSessionFile(sessionDir, sessionID)
+	_, absPath, err := store.SessionFile(sessionID)
+	if err != nil {
+		logging.Warn(ctx, "copilot-cli: refusing unsafe transcript path", "sessionID", sessionID, "err", err)
+		return ""
+	}
+	return absPath
 }
