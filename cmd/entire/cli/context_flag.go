@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/internal/entireclient/contexts"
@@ -43,11 +44,23 @@ func (v *contextFlagValue) Set(name string) error {
 // environment, where requestedContext picks it up as $ENTIRE_CONTEXT — the
 // parent and every child act as a login the final flag value did not name, and
 // any error blames a variable the user never set.
-var inheritedContextEnv struct {
-	captured bool
-	value    string
-	present  bool
+//
+// The capture goes through a sync.Once rather than a `captured` bool. Nothing
+// calls this concurrently — cobra parses flags once, on one goroutine, and only
+// when --context was actually passed — but a check-then-act on a package
+// variable is a data race the moment something does, and `go test -race`
+// reports it at all three field accesses. Once is also the honest primitive for
+// a one-shot snapshot. It does NOT make concurrent parsing meaningful: the
+// environment and flagOverride are last-write-wins by construction, and the
+// premise above — one invocation, one identity — is what actually rules
+// concurrency out.
+type inheritedEnv struct {
+	once    sync.Once
+	value   string
+	present bool
 }
+
+var inheritedContextEnv inheritedEnv
 
 // exportContextToChildren publishes the --context selection as ENTIRE_CONTEXT in
 // this process's own environment, so every process it spawns inherits it.
@@ -76,10 +89,9 @@ var inheritedContextEnv struct {
 // (contexts.requestedContext), so overwriting it here keeps parent and children
 // agreeing. A blank name restores the snapshot in inheritedContextEnv.
 func exportContextToChildren(name string) error {
-	if !inheritedContextEnv.captured {
+	inheritedContextEnv.once.Do(func() {
 		inheritedContextEnv.value, inheritedContextEnv.present = os.LookupEnv(contexts.EnvContextVar)
-		inheritedContextEnv.captured = true
-	}
+	})
 	name = strings.TrimSpace(name)
 	switch {
 	case name != "":

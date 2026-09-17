@@ -16,13 +16,17 @@ import (
 // call t.Parallel().
 
 // resetContextExportForTest starts a test from "nothing exported yet" and puts
-// the snapshot back afterwards, so the order tests run in cannot leak one
-// test's inherited value into another's restore.
+// the captured values back afterwards, so the order tests run in cannot leak
+// one test's inherited value into another's restore. The restored snapshot is
+// un-fired rather than already-captured, because a sync.Once cannot be put
+// back into the fired state: a later test that skips this helper therefore
+// re-reads the environment on its first export instead of inheriting whatever
+// the previous test happened to capture.
 func resetContextExportForTest(t *testing.T) {
 	t.Helper()
-	prev := inheritedContextEnv
-	inheritedContextEnv.captured = false
-	t.Cleanup(func() { inheritedContextEnv = prev })
+	prevValue, prevPresent := inheritedContextEnv.value, inheritedContextEnv.present
+	inheritedContextEnv = inheritedEnv{}
+	t.Cleanup(func() { inheritedContextEnv = inheritedEnv{value: prevValue, present: prevPresent} })
 }
 
 // TestContextFlag_ExportsToChildEnvironment: parsing --context publishes the
