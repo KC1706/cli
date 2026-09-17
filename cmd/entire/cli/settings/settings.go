@@ -730,10 +730,13 @@ func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs
 	// openai_privacy_filter.command is executed, so it is honored only from a
 	// local file positively verified as this developer's own. external_agents
 	// grants execution of every entire-agent-* binary on $PATH, so it gets the
-	// same gate. Agent instruction fields (investigate.always_prompt, review
-	// prompts) are appended verbatim to prompts of agents spawned with
-	// approval checks disabled, so they get the same provenance requirement,
-	// with clone-local preferences as an additional trusted layer.
+	// same gate. Agent instruction fields (review prompts and profile tasks)
+	// are appended verbatim to prompts of agents spawned with approval checks
+	// disabled, so they get the same provenance requirement, with clone-local
+	// preferences as an additional trusted layer. `investigate.always_prompt`
+	// was gated here too until investigate moved to the entire-investigate
+	// plugin; the plugin applies the equivalent check to its own config file,
+	// and the deprecated `investigate` key left in settings is not read.
 	enforceOPFCommandTrust(ctx, settings, localSettingsFileAbs, localData)
 	enforceExternalAgentsTrust(ctx, settings, localSettingsFileAbs, localData)
 	enforceAgentPromptTrust(ctx, settings, localSettingsFileAbs, localData, preferences)
