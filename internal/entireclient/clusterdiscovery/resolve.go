@@ -359,10 +359,16 @@ var autoSelectNoticeW io.Writer = os.Stderr
 // chosen. Auto-selection settles a single candidate only: picking among several
 // would make the acting identity depend on what else happens to be stored, so
 // the user picks. Names are sorted, so the message is stable across saves.
-// The per-command remedy is named alongside `auth use`, which changes the
-// machine-wide default.
+// Both remedies are named, in the same words renderUnusableActiveContext uses
+// for its switchHint: the per-command one first, because a cluster that trusts
+// several cores makes ambiguity the ordinary case for anyone holding a login
+// per jurisdiction, and retargeting every shell to clone once is the wrong
+// lever. `--context` is named as a bare flag rather than inside an `entire …`
+// invocation because git-remote-entire reaches this too (ResolveClusterAuth),
+// so the same sentence prints as `fatal:` during a plain `git push`, where
+// there is no `entire` command to hang the flag on.
 func ambiguousContextError(subject string, eligible []*contexts.Context) error {
-	return fmt.Errorf("multiple login contexts can authenticate against %s (%s); choose one for this command with `entire --context <context> …` (or %s=<context>), or switch the default with `entire auth use <context>`, and re-run",
+	return fmt.Errorf("multiple login contexts can authenticate against %s (%s); name one with `--context <context>` (or %s=<context>) for a single command, or switch the default with `entire auth switch <context>`, then re-run",
 		subject, strings.Join(contextNames(eligible), ", "), contexts.EnvContextVar)
 }
 
@@ -441,7 +447,7 @@ func eligibleContexts(f *contexts.File, coreURLs []string) []*contexts.Context {
 // first lines rather than an interpolated-away clause.
 //
 // The remedy also tracks where the identity came from: someone who passed
-// `--context` needs to change that argument, not run `auth use`, which would
+// `--context` needs to change that argument, not run `auth switch`, which would
 // leave the flag still overriding it on the next run.
 //
 // selectLoginContext reaches this only where auto-selection cannot apply: an
@@ -453,7 +459,7 @@ func eligibleContexts(f *contexts.File, coreURLs []string) []*contexts.Context {
 // to the caller.
 func renderUnusableActiveContext(subject string, sel contexts.Selection, eligible []*contexts.Context, t loginTargets) string {
 	names := strings.Join(contextNames(eligible), ", ")
-	switchHint := "Switch with `entire auth use <context>`, then re-run your command."
+	switchHint := "Switch with `entire auth switch <context>`, then re-run your command."
 	if sel.Explicit() {
 		switchHint = fmt.Sprintf("Name one with `--context <context>` (or %s), then re-run your command.", contexts.EnvContextVar)
 	}

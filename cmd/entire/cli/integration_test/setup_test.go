@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,6 +92,17 @@ func TestMain(m *testing.M) {
 	// child fails with UnknownContextError before it does anything.
 	if err := os.Unsetenv(contexts.EnvContextVar); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to unset %s: %v\n", contexts.EnvContextVar, err)
+		os.RemoveAll(tmpDir)
+		os.Exit(1)
+	}
+
+	// Same shape, same reason: absence, not a redirected path. ENTIRE_TOKEN
+	// outranks stored contexts in the identity resolver, and gitenv.Isolated()
+	// filters only GIT_CONFIG_*, so it reaches the spawned binary too — a test
+	// asserting the no-identity guidance would instead get a transport error
+	// from the host in the developer's token aud.
+	if err := os.Unsetenv(auth.EnvTokenVar); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to unset %s: %v\n", auth.EnvTokenVar, err)
 		os.RemoveAll(tmpDir)
 		os.Exit(1)
 	}
