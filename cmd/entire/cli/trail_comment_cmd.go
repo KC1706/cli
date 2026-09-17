@@ -118,12 +118,11 @@ func newTrailCommentListCmd() *cobra.Command {
 }
 
 func fetchAllTrailDiscussions(ctx context.Context, client *api.Client, path string) ([]api.TrailDiscussionSummary, error) {
-	const perPage = 100
 	var items []api.TrailDiscussionSummary
 	cursor := ""
 	seen := map[string]bool{}
 	for {
-		q := url.Values{"per_page": {strconv.Itoa(perPage)}}
+		q := url.Values{"per_page": {strconv.Itoa(trailListServerMaxLimit)}}
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
@@ -171,7 +170,7 @@ func printTrailDiscussions(w io.Writer, items []api.TrailDiscussionSummary, numb
 	if jsonOut {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(toTrailDiscussionsResponseJSON(api.TrailDiscussionsResponse{Items: filtered})); err != nil {
+		if err := enc.Encode(toTrailDiscussionsJSON(filtered)); err != nil {
 			return fmt.Errorf("encode discussions JSON: %w", err)
 		}
 		return nil

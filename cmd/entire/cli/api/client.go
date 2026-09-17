@@ -278,11 +278,9 @@ func DecodeJSON(resp *http.Response, dest any) error {
 
 // ErrorResponse represents a standard API error response. Older endpoints
 // return {"error":"message"}; newer endpoints return
-// {"error":{"code":"...","message":"...",...}}; entire-api cells proxied
-// through the gateway return huma's {"title":..,"status":..,"detail":"message"}.
-// ErrorResponse covers both the legacy {"error": ...} envelope and RFC 9457
-// problem details (application/problem+json), whose human-readable text is
-// detail with title as the coarser fallback. RequestID is a problem-details
+// {"error":{"code":"...","message":"...",...}}; entire-api cells return RFC
+// 9457 problem details (application/problem+json), whose human-readable text
+// is detail with title as the coarser fallback. RequestID is a problem-details
 // extension entire-api sets on every error; it is what support needs to find
 // the server-side trace, so it is carried through to HTTPError.
 type ErrorResponse struct {

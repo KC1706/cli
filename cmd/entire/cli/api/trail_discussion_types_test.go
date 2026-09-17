@@ -70,23 +70,3 @@ func TestTrailDiscussionWriteResponsesDecode(t *testing.T) {
 	require.Equal(t, "c1", *updated.Discussion.ReviewCommentID)
 	require.Equal(t, "actor-example", *updated.Discussion.ResolvedBy)
 }
-
-func TestTrailDiscussionUpdateRequestMarshalsResolvedFalse(t *testing.T) {
-	t.Parallel()
-	f := false
-	b, err := json.Marshal(TrailDiscussionUpdateRequest{Resolved: &f})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if string(b) != `{"resolved":false}` {
-		t.Errorf("got %s, want {\"resolved\":false}", b)
-	}
-	// Omitting resolved (nil) must drop the field.
-	b2, err := json.Marshal(TrailDiscussionUpdateRequest{})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if string(b2) != `{}` {
-		t.Errorf("got %s, want {}", b2)
-	}
-}

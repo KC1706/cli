@@ -83,6 +83,8 @@ func TestDiscussionJSONPreservesUnrelatedCLIKeys(t *testing.T) {
 	require.Contains(t, string(got["discussion"]), `"trailId": "tr1"`)
 	require.Contains(t, string(got["discussion"]), `"messageCount": 2`)
 	require.Contains(t, string(got["messages"]), `"createdAt": "2026-09-01T00:01:00Z"`)
+	requireCamelCaseKeys(t, got["discussion"])
+	requireCamelCaseKeys(t, got["messages"])
 	var created api.TrailDiscussionCreateResponse
 	require.NoError(t, json.Unmarshal([]byte(`{"discussion":{"id":"th1","title":"Thread safety","trail_id":"tr1"},"message":{"id":"m1","body":"Keep this thread safe"}}`), &created))
 	encoded, err := json.Marshal(toTrailDiscussionCreateResponseJSON(created))
@@ -91,4 +93,27 @@ func TestDiscussionJSONPreservesUnrelatedCLIKeys(t *testing.T) {
 	require.Contains(t, string(got["discussion"]), `"id":"th1"`)
 	require.Contains(t, string(got["discussion"]), `"title":"Thread safety"`)
 	require.Contains(t, string(got["message"]), `"body":"Keep this thread safe"`)
+}
+
+// requireCamelCaseKeys fails on any object key containing an underscore, at
+// any depth: the cell's snake_case spelling must not leak through a presenter.
+func requireCamelCaseKeys(t *testing.T, raw json.RawMessage) {
+	t.Helper()
+	var decoded any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	var walk func(path string, v any)
+	walk = func(path string, v any) {
+		switch node := v.(type) {
+		case map[string]any:
+			for key, child := range node {
+				require.NotContains(t, key, "_", "snake_case key %s.%s", path, key)
+				walk(path+"."+key, child)
+			}
+		case []any:
+			for i, child := range node {
+				walk(fmt.Sprintf("%s[%d]", path, i), child)
+			}
+		}
+	}
+	walk("$", decoded)
 }

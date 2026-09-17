@@ -266,8 +266,6 @@ func TestPrintReviewStreamEventReadsSnakeCasePayload(t *testing.T) {
 	}
 }
 
-// entire-api renames the stored thread vocabulary on read, so these arrive as
-// discussion.* and must not fall through to the generic default line.
 func TestPrintReviewStreamEventRendersDiscussionEvents(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

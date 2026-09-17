@@ -91,10 +91,7 @@ discover a trail selector first.`,
 			if err != nil {
 				return err
 			}
-			opts.StatusChanged = cmd.Flags().Changed("status")
-			opts.SeverityChanged = cmd.Flags().Changed("severity")
-			opts.FreshnessChanged = cmd.Flags().Changed("freshness")
-			opts.IncludeDismissedChanged = cmd.Flags().Changed("include-dismissed")
+			readTrailReviewListFlagChanges(cmd, &opts)
 			return runTrailReviewDashboard(cmd, selector, opts)
 		},
 	}
@@ -132,6 +129,13 @@ func addTrailReviewListFlags(cmd *cobra.Command, opts *trailReviewListOptions) {
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output as JSON")
 }
 
+func readTrailReviewListFlagChanges(cmd *cobra.Command, opts *trailReviewListOptions) {
+	opts.StatusChanged = cmd.Flags().Changed("status")
+	opts.SeverityChanged = cmd.Flags().Changed("severity")
+	opts.FreshnessChanged = cmd.Flags().Changed("freshness")
+	opts.IncludeDismissedChanged = cmd.Flags().Changed("include-dismissed")
+}
+
 func newTrailFindingListCmd(targetOpts *trailReviewTargetOptions) *cobra.Command {
 	opts := defaultTrailReviewListOptions()
 	cmd := &cobra.Command{
@@ -143,10 +147,7 @@ func newTrailFindingListCmd(targetOpts *trailReviewTargetOptions) *cobra.Command
 			if err != nil {
 				return err
 			}
-			opts.StatusChanged = cmd.Flags().Changed("status")
-			opts.SeverityChanged = cmd.Flags().Changed("severity")
-			opts.FreshnessChanged = cmd.Flags().Changed("freshness")
-			opts.IncludeDismissedChanged = cmd.Flags().Changed("include-dismissed")
+			readTrailReviewListFlagChanges(cmd, &opts)
 			return runTrailReviewComments(cmd, selector, opts)
 		},
 	}
@@ -682,14 +683,12 @@ func trailReviewCommentsPath(trailID string, opts trailReviewListOptions) string
 	q := url.Values{}
 	// A cursor restores the original filters. Only repeat filters the user
 	// explicitly supplied so defaults cannot overwrite the cursor's scope.
-	if opts.Cursor == "" || opts.StatusChanged {
-		status := opts.Status
-		if status == trailReviewStatusAny {
-			status = ""
-		}
-		if status != "" || opts.StatusChanged {
-			q.Set("status[eq]", status)
-		}
+	status := opts.Status
+	if status == trailReviewStatusAny {
+		status = ""
+	}
+	if (opts.Cursor == "" && status != "") || opts.StatusChanged {
+		q.Set("status[eq]", status)
 	}
 	if (opts.Cursor == "" && opts.Severity != "") || opts.SeverityChanged {
 		q.Set("severity[eq]", opts.Severity)
@@ -1147,35 +1146,18 @@ func trailReviewListCommentsPath(trailID string) string {
 }
 
 func resolveTrailReviewComment(ctx context.Context, client *api.Client, trailID, commentID string) (api.TrailReviewComment, error) {
-	opts := trailReviewListOptions{
-		Status:           trailReviewStatusAny,
-		Freshness:        trailReviewFreshnessAny,
-		IncludeDismissed: true,
-		Limit:            defaultTrailReviewLimit,
+	comments, err := fetchAllTrailReviewComments(ctx, client, trailID, trailReviewSummaryOptions())
+	if err != nil {
+		return api.TrailReviewComment{}, err
 	}
 	var matches []api.TrailReviewComment
-	seenCursors := map[string]bool{}
-	for {
-		comments, nextCursor, err := fetchTrailReviewComments(ctx, client, trailID, opts)
-		if err != nil {
-			return api.TrailReviewComment{}, err
+	for _, comment := range comments {
+		if comment.ID == commentID {
+			return comment, nil
 		}
-		for _, comment := range comments {
-			if comment.ID == commentID {
-				return comment, nil
-			}
-			if strings.HasPrefix(comment.ID, commentID) {
-				matches = append(matches, comment)
-			}
+		if strings.HasPrefix(comment.ID, commentID) {
+			matches = append(matches, comment)
 		}
-		if nextCursor == "" {
-			break
-		}
-		if seenCursors[nextCursor] {
-			return api.TrailReviewComment{}, fmt.Errorf("finding pagination repeated cursor %q", nextCursor)
-		}
-		seenCursors[nextCursor] = true
-		opts = trailReviewListOptions{Limit: opts.Limit, Cursor: nextCursor}
 	}
 	switch len(matches) {
 	case 0:
@@ -1472,21 +1454,19 @@ func resolveGitRev(ctx context.Context, ref string) (string, error) {
 }
 
 func encodeTrailReviewJSON(w io.Writer, target trailReviewTarget, comments []api.TrailReviewComment, nextCursor string, counts trailReviewCommentCounts) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	out := map[string]any{
-		"trail":    toTrailResourceJSON(target.Trail),
-		"counts":   counts,
-		"findings": toTrailReviewCommentsJSON(comments),
-		"has_more": nextCursor != "",
-	}
-	if nextCursor != "" {
-		out["next_cursor"] = nextCursor
-	}
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode trail findings JSON: %w", err)
-	}
-	return nil
+	return printJSON(w, struct {
+		Counts     trailReviewCommentCounts `json:"counts"`
+		Findings   []trailReviewCommentJSON `json:"findings"`
+		HasMore    bool                     `json:"has_more"`
+		NextCursor string                   `json:"next_cursor,omitempty"`
+		Trail      trailResourceJSON        `json:"trail"`
+	}{
+		Counts:     counts,
+		Findings:   toTrailReviewCommentsJSON(comments),
+		HasMore:    nextCursor != "",
+		NextCursor: nextCursor,
+		Trail:      toTrailResourceJSON(target.Trail),
+	})
 }
 
 func printTrailReviewDashboard(w io.Writer, target trailReviewTarget, comments []api.TrailReviewComment, nextCursor string, opts trailReviewListOptions, counts trailReviewCommentCounts) {

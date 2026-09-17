@@ -190,17 +190,6 @@ func TestTrailApprovalResponseDecodesStringAuthor(t *testing.T) {
 	}
 }
 
-func TestTrailCreateResponseDecodesBranchOutcome(t *testing.T) {
-	t.Parallel()
-	var out TrailCreateResponse
-	if err := json.Unmarshal([]byte(`{"has_new_branch":true,"trail":{"id":"trail-example","number":7}}`), &out); err != nil {
-		t.Fatal(err)
-	}
-	if !out.HasNewBranch || out.Trail.ID != "trail-example" {
-		t.Fatalf("create response = %#v", out)
-	}
-}
-
 func TestTrailWriteContracts(t *testing.T) {
 	t.Parallel()
 	reviewers := []string{}
@@ -217,6 +206,7 @@ func TestTrailWriteContracts(t *testing.T) {
 		{"request changes", TrailApprovalRequest{Event: "request_changes", Body: "Please fix"}, `{"event":"request_changes","body":"Please fix"}`},
 		{"discussion", TrailDiscussionCreateRequest{Title: "Design", Body: "Discuss"}, `{"title":"Design","body":"Discuss"}`},
 		{"reopen", TrailDiscussionUpdateRequest{Resolved: &no}, `{"resolved":false}`},
+		{"no-op update", TrailDiscussionUpdateRequest{}, `{}`},
 		{"message", TrailDiscussionMessageRequest{Body: "Reply"}, `{"body":"Reply"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

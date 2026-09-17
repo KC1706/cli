@@ -91,8 +91,7 @@ type TrailCreateRequest struct {
 }
 
 type TrailCreateResponse struct {
-	HasNewBranch bool          `json:"has_new_branch"`
-	Trail        TrailResource `json:"trail"`
+	Trail TrailResource `json:"trail"`
 }
 
 // TrailUpdateRequest uses pointers to distinguish absent fields from clears.

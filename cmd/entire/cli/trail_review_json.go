@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"github.com/entireio/cli/cmd/entire/cli/api"
 	"time"
-)
 
-// These CLI output types preserve the established JSON keys independently of
-// the cell wire schema. Keep API structs at the HTTP boundary.
+	"github.com/entireio/cli/cmd/entire/cli/api"
+)
 
 type trailReviewCommentJSON struct {
 	ID                        string                           `json:"id"`
@@ -36,7 +34,7 @@ type trailReviewCommentJSON struct {
 }
 
 func toTrailReviewCommentJSON(v api.TrailReviewComment) trailReviewCommentJSON {
-	out := trailReviewCommentJSON{
+	return trailReviewCommentJSON{
 		ID:                        v.ID,
 		TrailID:                   v.TrailID,
 		RepositoryID:              v.RepositoryID,
@@ -56,24 +54,16 @@ func toTrailReviewCommentJSON(v api.TrailReviewComment) trailReviewCommentJSON {
 		ClientIDHash:              v.ClientIDHash,
 		CreatedAt:                 v.CreatedAt,
 		UpdatedAt:                 v.UpdatedAt,
+		Location:                  trailReviewLocationJSON(v.Location),
+		SuggestedChanges:          mapSlice(v.SuggestedChanges, toTrailReviewSuggestedChangeJSON),
 		DiscussionID:              v.DiscussionID,
 		DiscussionMessageCount:    v.DiscussionMessageCount,
+		OutgoingLinks:             mapSlice(v.OutgoingLinks, toTrailReviewOutgoingLinkJSON),
 	}
+}
 
-	out.Location = toTrailReviewLocationJSON(v.Location)
-	if v.SuggestedChanges != nil {
-		out.SuggestedChanges = make([]trailReviewSuggestedChangeJSON, len(v.SuggestedChanges))
-		for i := range v.SuggestedChanges {
-			out.SuggestedChanges[i] = toTrailReviewSuggestedChangeJSON(v.SuggestedChanges[i])
-		}
-	}
-	if v.OutgoingLinks != nil {
-		out.OutgoingLinks = make([]trailReviewOutgoingLinkJSON, len(v.OutgoingLinks))
-		for i := range v.OutgoingLinks {
-			out.OutgoingLinks[i] = toTrailReviewOutgoingLinkJSON(v.OutgoingLinks[i])
-		}
-	}
-	return out
+func toTrailReviewCommentsJSON(comments []api.TrailReviewComment) []trailReviewCommentJSON {
+	return mapSlice(comments, toTrailReviewCommentJSON)
 }
 
 type trailReviewLocationJSON struct {
@@ -89,10 +79,6 @@ type trailReviewLocationJSON struct {
 	SelectedText    *string `json:"selectedText"`
 	NearbyText      *string `json:"nearbyText"`
 	Language        *string `json:"language"`
-}
-
-func toTrailReviewLocationJSON(v api.TrailReviewLocation) trailReviewLocationJSON {
-	return trailReviewLocationJSON(v)
 }
 
 type trailReviewSuggestedChangeJSON struct {
@@ -124,15 +110,4 @@ type trailReviewOutgoingLinkJSON struct {
 
 func toTrailReviewOutgoingLinkJSON(v api.TrailReviewOutgoingLink) trailReviewOutgoingLinkJSON {
 	return trailReviewOutgoingLinkJSON(v)
-}
-
-func toTrailReviewCommentsJSON(comments []api.TrailReviewComment) []trailReviewCommentJSON {
-	if comments == nil {
-		return nil
-	}
-	out := make([]trailReviewCommentJSON, len(comments))
-	for i := range comments {
-		out[i] = toTrailReviewCommentJSON(comments[i])
-	}
-	return out
 }

@@ -1,13 +1,27 @@
 package cli
 
 import (
+	"time"
+
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/trail"
-	"time"
 )
 
 // These CLI output types preserve the established JSON keys independently of
 // the cell wire schema. Keep API structs at the HTTP boundary.
+
+// mapSlice converts each element, keeping a nil input nil so the output
+// distinguishes "absent" from "empty" exactly as the wire value did.
+func mapSlice[T, U any](in []T, convert func(T) U) []U {
+	if in == nil {
+		return nil
+	}
+	out := make([]U, len(in))
+	for i := range in {
+		out[i] = convert(in[i])
+	}
+	return out
+}
 
 type trailResourceJSON struct {
 	ID                 string                 `json:"id,omitempty"`
@@ -64,10 +78,9 @@ func toTrailResourceJSON(v api.TrailResource) trailResourceJSON {
 		CheckpointCount:    v.CheckpointCount,
 		CommitsAhead:       v.CommitsAhead,
 	}
-
 	if v.BodyDocument != nil {
-		value := toTrailBodyDocumentJSON(*v.BodyDocument)
-		out.BodyDocument = &value
+		doc := trailBodyDocumentJSON(*v.BodyDocument)
+		out.BodyDocument = &doc
 	}
 	return out
 }
@@ -77,24 +90,12 @@ type trailBodyDocumentJSON struct {
 	ETag         string `json:"etag,omitempty"`
 }
 
-func toTrailBodyDocumentJSON(v api.TrailBodyDocument) trailBodyDocumentJSON {
-	return trailBodyDocumentJSON(v)
-}
-
 type trailApprovalsResponseJSON struct {
 	Approvals []trailApprovalJSON `json:"approvals"`
 }
 
 func toTrailApprovalsResponseJSON(v api.TrailApprovalsResponse) trailApprovalsResponseJSON {
-	out := trailApprovalsResponseJSON{}
-
-	if v.Approvals != nil {
-		out.Approvals = make([]trailApprovalJSON, len(v.Approvals))
-		for i := range v.Approvals {
-			out.Approvals[i] = toTrailApprovalJSON(v.Approvals[i])
-		}
-	}
-	return out
+	return trailApprovalsResponseJSON{Approvals: mapSlice(v.Approvals, toTrailApprovalJSON)}
 }
 
 type trailApprovalJSON struct {
@@ -108,47 +109,34 @@ type trailApprovalJSON struct {
 
 func toTrailApprovalJSON(v api.TrailApproval) trailApprovalJSON { return trailApprovalJSON(v) }
 
-type trailDiscussionsResponseJSON struct {
-	Items         []trailDiscussionSummaryJSON `json:"items"`
-	NextPageToken *string                      `json:"nextPageToken,omitempty"`
-	EventCursor   string                       `json:"eventCursor"`
+type trailDiscussionsJSON struct {
+	Items []trailDiscussionSummaryJSON `json:"items"`
 }
 
-func toTrailDiscussionsResponseJSON(v api.TrailDiscussionsResponse) trailDiscussionsResponseJSON {
-	out := trailDiscussionsResponseJSON{
-		NextPageToken: v.NextCursor,
-		EventCursor:   v.EventCursor,
-	}
-
-	if v.Items != nil {
-		out.Items = make([]trailDiscussionSummaryJSON, len(v.Items))
-		for i := range v.Items {
-			out.Items[i] = toTrailDiscussionSummaryJSON(v.Items[i])
-		}
-	}
-	return out
+func toTrailDiscussionsJSON(items []api.TrailDiscussionSummary) trailDiscussionsJSON {
+	return trailDiscussionsJSON{Items: mapSlice(items, toTrailDiscussionSummaryJSON)}
 }
 
 type trailDiscussionSummaryJSON struct {
 	ID                string                           `json:"id"`
 	TrailID           string                           `json:"trailId"`
-	Kind              string                           `json:"kind"` // "discussion" | "code_review"
+	Kind              string                           `json:"kind"`
 	Title             string                           `json:"title"`
 	ReviewCommentID   *string                          `json:"reviewCommentId"`
 	Resolved          bool                             `json:"resolved"`
-	ResolvedBy        *string                          `json:"resolvedBy"` // actor UUID
+	ResolvedBy        *string                          `json:"resolvedBy"`
 	ResolvedAt        *time.Time                       `json:"resolvedAt"`
-	CreatedBy         *string                          `json:"createdBy"` // actor UUID
+	CreatedBy         *string                          `json:"createdBy"`
 	CreatedAt         time.Time                        `json:"createdAt"`
 	UpdatedAt         time.Time                        `json:"updatedAt"`
 	LastMessageAt     *time.Time                       `json:"lastMessageAt"`
-	LastMessageAuthor *string                          `json:"lastMessageAuthor"` // GitHub login
+	LastMessageAuthor *string                          `json:"lastMessageAuthor"`
 	MessageCount      int                              `json:"messageCount"`
 	Participants      []trailDiscussionParticipantJSON `json:"participants"`
 }
 
 func toTrailDiscussionSummaryJSON(v api.TrailDiscussionSummary) trailDiscussionSummaryJSON {
-	out := trailDiscussionSummaryJSON{
+	return trailDiscussionSummaryJSON{
 		ID:                v.ID,
 		TrailID:           v.TrailID,
 		Kind:              v.Kind,
@@ -163,15 +151,8 @@ func toTrailDiscussionSummaryJSON(v api.TrailDiscussionSummary) trailDiscussionS
 		LastMessageAt:     v.LastMessageAt,
 		LastMessageAuthor: v.LastMessageAuthor,
 		MessageCount:      v.MessageCount,
+		Participants:      mapSlice(v.Participants, toTrailDiscussionParticipantJSON),
 	}
-
-	if v.Participants != nil {
-		out.Participants = make([]trailDiscussionParticipantJSON, len(v.Participants))
-		for i := range v.Participants {
-			out.Participants[i] = toTrailDiscussionParticipantJSON(v.Participants[i])
-		}
-	}
-	return out
 }
 
 type trailDiscussionParticipantJSON struct {
@@ -189,48 +170,34 @@ type trailDiscussionDetailResponseJSON struct {
 }
 
 func toTrailDiscussionDetailResponseJSON(v api.TrailDiscussionDetailResponse) trailDiscussionDetailResponseJSON {
-	out := trailDiscussionDetailResponseJSON{
+	return trailDiscussionDetailResponseJSON{
+		Discussion:  toTrailDiscussionSummaryJSON(v.Discussion),
+		Messages:    mapSlice(v.Messages, toTrailDiscussionMessageJSON),
 		EventCursor: v.EventCursor,
 	}
-
-	out.Discussion = toTrailDiscussionSummaryJSON(v.Discussion)
-	if v.Messages != nil {
-		out.Messages = make([]trailDiscussionMessageJSON, len(v.Messages))
-		for i := range v.Messages {
-			out.Messages[i] = toTrailDiscussionMessageJSON(v.Messages[i])
-		}
-	}
-	return out
 }
 
 type trailDiscussionMessageJSON struct {
 	ID        string                     `json:"id"`
-	Author    string                     `json:"author"` // GitHub login
+	Author    string                     `json:"author"`
 	CreatedAt time.Time                  `json:"createdAt"`
 	Body      string                     `json:"body"`
 	Replies   []trailDiscussionReplyJSON `json:"replies"`
 }
 
 func toTrailDiscussionMessageJSON(v api.TrailDiscussionMessage) trailDiscussionMessageJSON {
-	out := trailDiscussionMessageJSON{
+	return trailDiscussionMessageJSON{
 		ID:        v.ID,
 		Author:    v.Author,
 		CreatedAt: v.CreatedAt,
 		Body:      v.Body,
+		Replies:   mapSlice(v.Replies, toTrailDiscussionReplyJSON),
 	}
-
-	if v.Replies != nil {
-		out.Replies = make([]trailDiscussionReplyJSON, len(v.Replies))
-		for i := range v.Replies {
-			out.Replies[i] = toTrailDiscussionReplyJSON(v.Replies[i])
-		}
-	}
-	return out
 }
 
 type trailDiscussionReplyJSON struct {
 	ID        string    `json:"id"`
-	Author    string    `json:"author"` // GitHub login
+	Author    string    `json:"author"`
 	CreatedAt time.Time `json:"createdAt"`
 	Body      string    `json:"body"`
 }
@@ -245,12 +212,10 @@ type trailDiscussionCreateResponseJSON struct {
 }
 
 func toTrailDiscussionCreateResponseJSON(v api.TrailDiscussionCreateResponse) trailDiscussionCreateResponseJSON {
-	out := trailDiscussionCreateResponseJSON{}
-
-	out.Discussion = toTrailDiscussionSummaryJSON(v.Discussion)
+	out := trailDiscussionCreateResponseJSON{Discussion: toTrailDiscussionSummaryJSON(v.Discussion)}
 	if v.Message != nil {
-		value := toTrailDiscussionMessageJSON(*v.Message)
-		out.Message = &value
+		message := toTrailDiscussionMessageJSON(*v.Message)
+		out.Message = &message
 	}
 	return out
 }
