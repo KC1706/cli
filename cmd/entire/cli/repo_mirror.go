@@ -285,7 +285,7 @@ func buildRepoDir(entries []coreapi.RepoIndexEntry, hostBySlug map[string]string
 			if cand.Onboardable {
 				status = "available"
 			}
-			rows = append(rows, repoDirRow{Repo: mirrorRepoRef(name), Private: private, Status: status, Access: string(cand.Access)})
+			rows = append(rows, repoDirRow{Repo: qualifyRepoRef(name), Private: private, Status: status, Access: string(cand.Access)})
 			continue
 		}
 		owner, repo, _ := strings.Cut(name, "/")
@@ -310,7 +310,7 @@ func buildRepoDir(entries []coreapi.RepoIndexEntry, hostBySlug map[string]string
 		if len(placements) == 0 {
 			continue // native-only repo: not part of the mirror directory
 		}
-		rows = append(rows, repoDirRow{Repo: mirrorRepoRef(name), Private: private, Status: status, Placements: placements})
+		rows = append(rows, repoDirRow{Repo: qualifyRepoRef(name), Private: private, Status: status, Placements: placements})
 	}
 	return rows
 }
@@ -353,11 +353,11 @@ func sortRepoDir(rows []repoDirRow, spec string) error {
 	return nil
 }
 
-// mirrorRepoRef qualifies a bare <owner>/<repo> from the repos index with the
-// forge it belongs to, so a directory row prints the same shape every mirror
-// verb accepts. A value copied from the NAME column, or read out of --json, is
-// then a reference rather than something to prepend a forge to by hand.
-func mirrorRepoRef(ownerRepo string) string {
+// qualifyRepoRef qualifies a bare <a>/<b> from the repos index with the forge
+// it belongs to, so a directory row prints the same shape every mirror verb
+// accepts. A value copied from the NAME column, or read out of --json, is then
+// a reference rather than something to prepend a forge to by hand.
+func qualifyRepoRef(ownerRepo string) string {
 	return "/" + mirrorCloneForge + "/" + ownerRepo
 }
 
@@ -500,11 +500,12 @@ func newRepoMirrorAddCmd() *cobra.Command {
 // runCoreForCluster needs to find the core fronting that cluster, and the one
 // the clone URL is built from. The user never types it.
 func runMirrorAdd(cmd *cobra.Command, repoRef, clusterSlug string, opts mirrorAddOptions) error {
-	owner, repo, err := parseGitHubMirrorRepoRef(repoRef)
+	target, err := parseMirrorRepoRef(repoRef, mirrorCloneForge)
 	if err != nil {
 		cmd.SilenceUsage = true
 		return err
 	}
+	owner, repo := target.owner, target.repo
 	// --cluster omitted: on an interactive terminal, offer the catalog's
 	// clusters as a picker (the same prompt-only-when-there-is-a-choice shape
 	// as `repo clone`); non-interactive invocations take defaultClusterSlug so
@@ -1060,12 +1061,12 @@ func newRepoMirrorGetCmd() *cobra.Command {
 			}
 			// Everything else is a repository reference, in the one grammar
 			// the whole mirror subtree takes.
-			owner, repo, err := parseGitHubMirrorRepoRef(ref)
+			target, err := parseMirrorRepoRef(ref, mirrorCloneForge)
 			if err != nil {
 				cmd.SilenceUsage = true
 				return err
 			}
-			return runRepoMirrorGetByName(cmd, owner+"/"+repo)
+			return runRepoMirrorGetByName(cmd, target.owner+"/"+target.repo)
 		},
 	}
 	addJSONFlag(cmd)
@@ -1120,7 +1121,7 @@ func mirrorRepoDetailRow(e coreapi.RepoIndexEntry, hostBySlug map[string]string)
 		if name == "" {
 			name = e.Name
 		}
-		return repoDirRow{Repo: mirrorRepoRef(name), Private: strings.EqualFold(e.Visibility, "private")}
+		return repoDirRow{Repo: qualifyRepoRef(name), Private: strings.EqualFold(e.Visibility, "private")}
 	}
 	row := rows[0]
 	slices.SortFunc(row.Placements, func(a, b repoDirPlacement) int {
@@ -1275,11 +1276,12 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 			"  entire repo mirror remove /gh/octocat/hello-world --cluster aws-eu-central-1",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			owner, repo, err := parseGitHubMirrorRepoRef(args[0])
+			target, err := parseMirrorRepoRef(args[0], mirrorCloneForge)
 			if err != nil {
 				cmd.SilenceUsage = true
 				return err
 			}
+			owner, repo := target.owner, target.repo
 			clusterHost, err := clusterHostForSlug(cmd, cluster)
 			if err != nil {
 				cmd.SilenceUsage = true

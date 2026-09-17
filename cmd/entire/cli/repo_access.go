@@ -63,7 +63,7 @@ func newRepoAccessListCmd() *cobra.Command {
 			"  entire repo access list /gh/acme/widget --cluster aws-eu-central-1",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			owner, repo, err := parseGitHubMirrorRepoRef(args[0])
+			target, err := parseMirrorRepoRef(args[0], mirrorCloneForge)
 			if err != nil {
 				cmd.SilenceUsage = true
 				// This verb's name says nothing about GitHub, so a native repo
@@ -75,6 +75,7 @@ func newRepoAccessListCmd() *cobra.Command {
 				}
 				return err
 			}
+			owner, repo := target.owner, target.repo
 			clusterHost, err := clusterHostForSlug(cmd, cluster)
 			if err != nil {
 				cmd.SilenceUsage = true

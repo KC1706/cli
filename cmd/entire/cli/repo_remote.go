@@ -365,11 +365,11 @@ const mirrorUseForge = "gh"
 // the URL path), so switching clusters never needs the repo retyped.
 func resolveMirrorUseUpstream(ctx context.Context, dir, remote, arg string) (owner, repo string, err error) {
 	if arg != "" {
-		owner, repo, err = parseGitHubMirrorRepoRef(arg)
-		if err != nil {
-			return "", "", err
+		target, perr := parseMirrorRepoRef(arg, mirrorUseForge)
+		if perr != nil {
+			return "", "", perr
 		}
-		return owner, repo, nil
+		return target.owner, target.repo, nil
 	}
 
 	candidates := []string{remote}

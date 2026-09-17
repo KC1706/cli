@@ -1403,7 +1403,7 @@ func TestRepoMirrorGet_Routing(t *testing.T) {
 func TestMirrorRefOwner(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, "acme", mirrorRefOwner("/gh/acme/web"))
-	require.Equal(t, "acme", mirrorRefOwner(mirrorRepoRef("acme/web")))
+	require.Equal(t, "acme", mirrorRefOwner(qualifyRepoRef("acme/web")))
 	require.Empty(t, mirrorRefOwner(""))
 }
 
