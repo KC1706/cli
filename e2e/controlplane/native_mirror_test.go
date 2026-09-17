@@ -5,6 +5,7 @@ package controlplane
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -45,8 +46,8 @@ type repoDirJSON struct {
 }
 
 // TestControlPlane_NativeMirrorLifecycle drives a native repo through the whole
-// mirror surface: see where it lives, place a read-only replica in another
-// region, clone from it, repoint a git remote at it, and tear it back down.
+// mirror surface: see where it lives, place a replica in another region, clone
+// from it, push through it, repoint a git remote at it, and tear it back down.
 //
 // Phases are ordered subtests sharing one repo — the suite is serial against a
 // single account, and a seed is too slow to pay for more than once. Each phase
@@ -155,7 +156,6 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 		})
 		cloneURL = "entire://" + target.Host + ref
 		require.Contains(t, stdout, cloneURL, "a ready mirror prints the URL to clone it from")
-		require.Contains(t, stdout, "read-only", "the one thing a mirror cannot do is stated")
 	})
 
 	phase("get shows the primary and the mirror, each by role", func(t *testing.T) {
@@ -191,14 +191,23 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 		require.NoError(t, err, "cloning a mirror with the home-region login failed; if this is COR-1043, record it: %s", stderr)
 	})
 
-	phase("remote use fetches from the mirror and pushes to the primary", func(t *testing.T) {
+	// A placement serves pushes as well as fetches, so `remote use` writes ONE
+	// URL and git needs no pushurl. This pins that: a remote pointed at a mirror
+	// both fetches and pushes through it. If mirrors ever became read-only, the
+	// push below is what would say so, rather than a user discovering it.
+	phase("remote use points one URL at the mirror, and pushing through it works", func(t *testing.T) {
 		_, stderr, err := runEntire(t, clone, "repo", "remote", "use", "--cluster", target.Slug)
 		require.NoError(t, err, stderr)
+
 		remotes := testutil.GitOutput(t, clone, "remote", "-v")
-		primaryURL := "entire://" + repo.ClusterHost + ref
 		assert.Contains(t, remotes, "origin\t"+cloneURL+" (fetch)")
-		assert.Contains(t, remotes, "origin\t"+primaryURL+" (push)",
-			"a mirror is read-only, so pushes must still reach the primary")
+		assert.Contains(t, remotes, "origin\t"+cloneURL+" (push)",
+			"one URL per remote: a mirror serves pushes too, so there is no split push target")
+
+		require.NoError(t, os.WriteFile(filepath.Join(clone, "through-the-mirror.txt"), []byte("hello\n"), 0o644))
+		testutil.CommitIfDirty(t, clone, "push through the mirror")
+		out, perr := testutil.GitOutputErr(clone, "push", "origin", "HEAD")
+		require.NoError(t, perr, "pushing through a mirror must work:\n%s", out)
 	})
 
 	phase("remove tears the replica down", func(t *testing.T) {

@@ -125,16 +125,6 @@ type mirrorRemotePlan struct {
 	// the previous URL did not make it into git config — the difference matters:
 	// this is the one path where a successful-looking run drops the old URL.
 	preserveSkipped string
-	// pushURL, when non-empty, is written as remote.<name>.pushurl so pushes
-	// leave the mirror and go to the repo's primary cluster. An Entire-native
-	// mirror is read-only: without this, repointing a remote at one would trade
-	// a working `git push` for a server refusal, which is not a trade the user
-	// asked for by choosing where to fetch from.
-	//
-	// It is only ever SET, never cleared. A native repo's primary does not move,
-	// so a pushurl left behind by an earlier `remote use` already names the same
-	// cluster this one would.
-	pushURL string
 	// noop is true when remote already points at mirrorURL.
 	noop bool
 }
@@ -150,8 +140,8 @@ type mirrorRemotePlan struct {
 // in preserveSkipped rather than dropped quietly, because a fork checkout
 // (`origin` + `upstream` both already configured) hits that path by default and
 // would otherwise see a clean ✓ while the replaced URL left git config for good.
-func planMirrorRemote(remote, mirrorURL, pushURL, currentURL, upstream string, remotes map[string]bool) mirrorRemotePlan {
-	plan := mirrorRemotePlan{remote: remote, mirrorURL: mirrorURL, pushURL: pushURL}
+func planMirrorRemote(remote, mirrorURL, currentURL, upstream string, remotes map[string]bool) mirrorRemotePlan {
+	plan := mirrorRemotePlan{remote: remote, mirrorURL: mirrorURL}
 	if !remotes[remote] {
 		plan.add = true
 		return plan
@@ -195,11 +185,6 @@ func applyMirrorRemotePlan(ctx context.Context, dir string, plan mirrorRemotePla
 	if _, err := gitRunner(ctx, dir, "remote", verb, plan.remote, plan.mirrorURL); err != nil {
 		return fmt.Errorf("point remote %q at the mirror: %w", plan.remote, err)
 	}
-	if plan.pushURL != "" {
-		if _, err := gitRunner(ctx, dir, "remote", "set-url", "--push", plan.remote, plan.pushURL); err != nil {
-			return fmt.Errorf("point pushes of remote %q at the primary: %w", plan.remote, err)
-		}
-	}
 	return nil
 }
 
@@ -227,11 +212,6 @@ func reportMirrorRemotePlan(out, errW io.Writer, plan mirrorRemotePlan) {
 		}
 	}
 	fmt.Fprintf(out, "\nFetch through it:\n  git fetch %s\n", plan.remote)
-	if plan.pushURL != "" {
-		// Said plainly rather than left to be discovered by a rejected push: the
-		// user asked to fetch from a mirror and got a split remote out of it.
-		fmt.Fprintf(out, "\nThe mirror is read-only, so pushes still go to the primary:\n  %s\n", plan.pushURL)
-	}
 
 	if plan.preserveSkipped != "" {
 		// The URL is redacted here for the same reason it is on the "was:" line:
@@ -504,9 +484,6 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			var (
 				placements []coreapi.ResolvedPlacement
 				clusters   []coreapi.Cluster
-				// primaryURL is set only for a native repo: pushes must go there
-				// even when fetches come from a read-only mirror.
-				primaryURL string
 				nativeRepo *coreapi.Repo
 			)
 			if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
@@ -521,7 +498,6 @@ func newRepoRemoteUseCmd() *cobra.Command {
 					}
 					nativeRepo, clusters = repo, cat
 					placements = nativeUsePlacements(repo, mirrors, cat)
-					primaryURL = nativeRepoURLAt(repo, clusterHostBySlug(cat)[repo.ClusterSlug.Or("")])
 					return nil
 				}
 				ps, lerr := resolvePullablePlacements(ctx, c, repoRef.owner, repoRef.repo)
@@ -572,15 +548,8 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			mirrorURL := forgeCloneURL(mirrorCloneForge, chosen.ClusterHost, repoRef.owner, repoRef.repo)
 			// A native URL is the server's own path, not a reconstruction from
 			// the ref, so `repo view`'s remote and this one cannot disagree.
-			// pushURL is set only when the chosen placement is NOT the primary:
-			// pointing a remote's pushes at the cluster it already fetches from
-			// would be noise in git config.
-			pushURL := ""
 			if repoRef.forge == nativeCloneForge {
 				mirrorURL = nativeRepoURLAt(nativeRepo, chosen.ClusterHost)
-				if primaryURL != "" && !strings.EqualFold(primaryURL, mirrorURL) {
-					pushURL = primaryURL
-				}
 			}
 
 			remotes, err := listGitRemotes(ctx, repoRoot)
@@ -615,7 +584,7 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			if target != remote {
 				targetURL = ""
 			}
-			plan := planMirrorRemote(target, mirrorURL, pushURL, targetURL, preserve, remotes)
+			plan := planMirrorRemote(target, mirrorURL, targetURL, preserve, remotes)
 			if err := applyMirrorRemotePlan(ctx, repoRoot, plan); err != nil {
 				return err
 			}

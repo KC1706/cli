@@ -27,8 +27,8 @@ import (
 //   - The primary placement is NOT in the native-mirror list. GET returns only
 //     the additional ones, so any view of "where does this repo live" joins the
 //     repo's own clusterSlug onto that list.
-//   - A native mirror is read-only. Pushes go to the primary; a replica is
-//     never promoted, and removing one tears down that copy alone.
+//   - A replica is never promoted: removing one tears down that copy alone,
+//     and the primary is not in the list to remove.
 //   - v1 places mirrors cross-jurisdiction only, and the primary is fixed to
 //     the owning project's region.
 //
@@ -275,9 +275,9 @@ func nativeMirrorBeingDeletedHint(err error, ref, clusterSlug string) error {
 		err, ref, clusterSlug, ref)
 }
 
-// runNativeMirrorAdd is `repo mirror add /et/<project>/<repo>`: place a
-// read-only replica of a native repo on another cluster, then wait for it to
-// become readable unless --no-wait says otherwise.
+// runNativeMirrorAdd is `repo mirror add /et/<project>/<repo>`: place a replica
+// of a native repo on another cluster, then wait for it to become readable
+// unless --no-wait says otherwise.
 //
 // Everything runs on the active-context client. The native-mirror routes are
 // home-core-scoped and answer 421 for a repo in another jurisdiction, which
@@ -414,7 +414,6 @@ func reportNativeMirrorReady(w io.Writer, cloneURL string) {
 		return
 	}
 	fmt.Fprintf(w, "\nClone it:\n  git clone %s\n", cloneURL)
-	fmt.Fprintln(w, "\nIt is read-only — pushes go to the repo's primary cluster.")
 }
 
 // nativeMirrorWaitError turns a failed wait into the message that helps. The
@@ -570,7 +569,6 @@ func nativeRepoDetailRow(name string, repo *coreapi.Repo, mirrors []coreapi.Nati
 // table or --json stays clean, and names the cluster so a multi-placement repo
 // stays legible.
 func reportNativeMirrorNotes(w io.Writer, mirrors []coreapi.NativeMirrorPlacement) {
-	fmt.Fprintln(w, "\nMirrors are read-only; pushes go to the primary.")
 	for _, m := range mirrors {
 		if detail := strings.TrimSpace(m.LastError.Or("")); detail != "" {
 			fmt.Fprintf(w, "%s: %s\n", m.ClusterSlug, detail)

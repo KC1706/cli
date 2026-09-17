@@ -120,8 +120,8 @@ type repoDirPlacement struct {
 	Status  string `json:"status"`
 	// Role is the wire vocabulary of POST /repos/resolve: "primary" or
 	// "native_mirror". It is set only for Entire-native repos, where the two
-	// differ in what they can do — a mirror is read-only, and the primary is
-	// not removable through the mirror verbs. A GitHub repo's placements are
+	// differ in what you may do to the placement itself: the primary is not
+	// removable through the mirror verbs. A GitHub repo's placements are
 	// all mirrors of an upstream that is not a placement at all, so they carry
 	// no role and the column stays out of that view.
 	Role string `json:"role,omitempty"`
@@ -544,7 +544,7 @@ func newRepoMirrorAddCmd() *cobra.Command {
 			"(upstream, cluster). When --cluster is omitted, an " +
 			"interactive terminal offers the available clusters as a picker; " +
 			"non-interactive runs default to " + defaultClusterSlug + ".\n\n" +
-			"With an /et/ ref, places a read-only replica of an Entire-native repo " +
+			"With an /et/ ref, places a replica of an Entire-native repo " +
 			"on another cluster and waits for it to be seeded. A native mirror goes " +
 			"in a region other than the repo's own, so --cluster has no default " +
 			"there: a terminal offers the eligible clusters, other runs must name " +
@@ -1120,7 +1120,7 @@ func newRepoMirrorGetCmd() *cobra.Command {
 			"    the repo (visibility, access) and its mirror on every cluster, with\n" +
 			"    per-cluster clone URL and status\n" +
 			"  - /et/<project>/<repo> — shows an Entire-native repo's primary cluster\n" +
-			"    and each read-only mirror of it, with per-cluster clone URL, status\n" +
+			"    and each mirror of it, with per-cluster clone URL, status\n" +
 			"    and, while one is being seeded, how far it has got\n" +
 			"  - a mirror ULID\n" +
 			"  - an entire:// clone URL (entire://<cluster>/gh/<owner>/<repo>) — the form\n" +
@@ -1256,8 +1256,8 @@ func mirrorRepoDetailRow(e coreapi.RepoIndexEntry, hostBySlug map[string]string)
 // a native-only repo states it has no GitHub mirrors.
 //
 // A ROLE column appears only when some placement carries one, which is the
-// native view: there a repo's primary and its read-only mirrors sit in the same
-// table and the difference decides what you can do with each. GitHub rows carry
+// native view: there a repo's primary and its mirrors sit in the same table,
+// and only the primary is outside the mirror verbs' reach. GitHub rows carry
 // no role — every placement there mirrors an upstream that is not itself a
 // placement — so that view keeps three columns.
 func renderRepoDetail(w io.Writer, row repoDirRow) {

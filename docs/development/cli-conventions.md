@@ -126,12 +126,13 @@ the commands are always runnable in every build.
   addressed by `(repoId, clusterSlug)` under `/repos/{repoId}/native-mirrors`,
   and three things follow from that: the primary placement is **not** in the
   native-mirror list (so any "where does this repo live" view joins the repo's
-  own `clusterSlug` onto it), a native mirror is **read-only** with no
-  promotion (pushes go to the primary, and removing one tears down that copy
-  alone), and v1 places them **cross-jurisdiction only**. Those last two are why
+  own `clusterSlug` onto it), a replica is **never promoted** (removing one
+  tears down that copy alone, and the primary is not in the list to remove),
+  and v1 places them **cross-jurisdiction only**. Those last two are why
   `add`/`remove` refuse the repo's own primary cluster and a same-region target
   before writing anything, and why `--cluster` has no default on the native
-  path. `list` stays GitHub-only by default; `--forge et|all` opts native rows
+  path. Pushing and fetching both work through any placement, so a remote
+  pointed at one needs no special handling. `list` stays GitHub-only by default; `--forge et|all` opts native rows
   in, classified by the entry's `provider` (falling back to the placements'
   `mirror` flag when the optional field is absent — never the other way round,
   since `mirror` must not decide which placement *routes* a repo). The
@@ -144,12 +145,11 @@ the commands are always runnable in every build.
   whether to replace the remote (preserving the old URL under `--upstream`) or
   add a separate one; non-interactively it repoints `--remote` directly. It
   serves both forges: for a native repo the placements are its primary plus each
-  **ready** mirror, and choosing a mirror also writes
-  `remote.<name>.pushurl` pointing at the primary — a native mirror is
-  read-only, so without it a chosen fetch source would silently cost the user
-  `git push`. Both `remote use` and `clone` choose a placement through the
-  shared `selectPlacement` picker, which matches on the cluster host the caller
-  already resolved and shows slugs, since that is what `--cluster` takes. `access list` shows who can pull a mirror (live
+  **ready** mirror. One URL per remote either way — a placement serves pushes as
+  well as fetches, so there is no split fetch/push remote to maintain. Both
+  `remote use` and `clone` choose a placement through the shared
+  `selectPlacement` picker, which matches on the cluster host the caller already
+  resolved and shows slugs, since that is what `--cluster` takes. `access list` shows who can pull a mirror (live
   GitHub-admin gated). `edit --visibility` sets a native repo's visibility;
   `visibility get` reads it.
   **A repository is named `/<forge>/<a>/<b>` and no other way**, across the
