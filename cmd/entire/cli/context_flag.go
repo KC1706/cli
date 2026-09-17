@@ -115,10 +115,15 @@ func wrapExportErr(err error) error {
 // resolve straight through to $ENTIRE_CONTEXT and refuse the user's own
 // variable — on every command, `version` included.
 //
-// On failure the export is undone: the name was published to the environment
-// during flag parsing, before this check could run, and anything spawned on
-// the way out (analytics, the version check) would otherwise inherit a login
-// that does not exist.
+// On failure the export is undone. The name reached the environment during
+// flag parsing, before this check could run, so refusing it without also
+// retracting it would leave the process advertising a login it has just
+// rejected. Nothing observes that today: cobra returns straight out of its
+// pre-run loop on our error, so PersistentPostRun — and the analytics spawn
+// inside it — never runs, and main.go prints and exits without starting
+// anything else. The retraction is therefore a guard for a future caller on
+// that path, not a live leak, which is also why the in-process override is
+// left as it is: nothing resolves an identity again before the process exits.
 func validateContextFlag(cmd *cobra.Command) error {
 	f := cmd.Flags().Lookup("context")
 	if f == nil || strings.TrimSpace(f.Value.String()) == "" {
