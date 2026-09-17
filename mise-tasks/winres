@@ -1,0 +1,12 @@
+#!/bin/bash
+#MISE description="Generate Windows PE VERSIONINFO resources (.syso) for entire and git-remote-entire"
+#MISE quiet=true
+
+set -euo pipefail
+
+version="${1:?usage: mise run winres <version>}"
+
+go-winres make --in winres/entire.json --out cmd/entire/rsrc --arch amd64,arm64 \
+    --product-version "$version" --file-version "$version"
+go-winres make --in winres/git-remote-entire.json --out cmd/git-remote-entire/rsrc --arch amd64,arm64 \
+    --product-version "$version" --file-version "$version"
