@@ -407,3 +407,54 @@ func TestRepoMirrorList_ForgeFlag(t *testing.T) {
 	require.Equal(t, mirrorCloneForge, newRepoMirrorListCmd().Flag("forge").DefValue,
 		"the default view must stay GitHub: native rows are opt-in")
 }
+
+// TestMirrorRefOwner_BothForges pins that --owner reads the owner segment of a
+// NAME cell on either forge. Stripping only the `gh/` token read "/et/acme/web"
+// as owner "et", so `--forge et --owner acme` matched nothing while
+// `--owner et` matched every native row.
+func TestMirrorRefOwner_BothForges(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "acme", mirrorRefOwner("/gh/acme/web"))
+	require.Equal(t, "acme", mirrorRefOwner("/et/acme/web"))
+	require.Equal(t, "acme", mirrorRefOwner("et/acme/web"), "the leading slash is optional")
+	require.Equal(t, "acme", mirrorRefOwner("acme/web"), "a value carrying no forge keeps its first segment")
+}
+
+// TestBuildRepoDir_ProviderOutranksThePlacementFlag pins that once `provider`
+// has classified a row, the placements are kept as they came. Re-deriving the
+// forge per placement can only disagree with the provider, and a disagreement
+// empties the row — dropping the repo from the directory altogether.
+func TestBuildRepoDir_ProviderOutranksThePlacementFlag(t *testing.T) {
+	t.Parallel()
+	hosts := map[string]string{"us": "aws-us-east-2.entire.io"}
+	// A native repo whose placement is marked mirror:true — the shape
+	// cell_fanout.go warns the index can produce.
+	entry := coreapi.RepoIndexEntry{
+		FullName:   "acme/native",
+		Visibility: "private",
+		Provider:   coreapi.NewOptString(repoProviderEntire),
+		Placements: []coreapi.RepoPlacement{
+			{ClusterSlug: "us", Status: coreapi.RepoPlacementStatusReady, Mirror: true},
+		},
+	}
+	rows := buildRepoDir([]coreapi.RepoIndexEntry{entry}, hosts, nativeCloneForge)
+	require.Len(t, rows, 1, "the provider says native, so the row survives its placement flag")
+	require.Equal(t, "/et/acme/native", rows[0].Repo)
+	require.Equal(t, "entire://aws-us-east-2.entire.io/et/acme/native", rows[0].Placements[0].CloneURL)
+}
+
+// TestRepoMirrorAdd_NativeRefusesAHostBeforeAnyRequest pins that --cluster is
+// shape-checked on the native path too. A host reached the catalog lookup and
+// came back as an unknown cluster, when the answer is that it is not a slug.
+//
+// Not parallel: swaps the package-level activeCoreClient seam.
+func TestRepoMirrorAdd_NativeRefusesAHostBeforeAnyRequest(t *testing.T) {
+	serveClusters(t, testClusterCatalog) // any request at all would be a failure
+	cmd := newRepoMirrorAddCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"/et/acme/web", "--cluster", "aws-eu-central-1.entire.io"})
+	err := cmd.ExecuteContext(t.Context())
+	require.ErrorContains(t, err, "invalid --cluster")
+	require.ErrorContains(t, err, "is not a cluster slug")
+}

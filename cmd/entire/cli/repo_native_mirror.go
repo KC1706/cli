@@ -304,6 +304,12 @@ func runNativeMirrorAdd(cmd *cobra.Command, ref mirrorRepoRef, clusterSlug strin
 		if err := checkNativeMirrorTarget(repo, clusters, clusterSlug, name); err != nil {
 			return err
 		}
+		// The catalog match folds case; the host map that builds the clone URL
+		// does not. Take the catalog's own spelling so a mixed-case --cluster
+		// cannot pass the check and then yield an empty clone URL.
+		if cl, ok := clusterBySlug(clusters, clusterSlug); ok {
+			clusterSlug = cl.Slug
+		}
 
 		out, errW := cmd.OutOrStdout(), cmd.ErrOrStderr()
 		created, err := c.CreateNativeMirror(ctx, &coreapi.CreateNativeMirrorInputBody{ClusterSlug: clusterSlug}, coreapi.CreateNativeMirrorParams{RepoId: repo.ID})
@@ -445,7 +451,7 @@ func nativeMirrorWaitError(errW io.Writer, err error, p coreapi.NativeMirrorPlac
 func runNativeMirrorRemove(cmd *cobra.Command, ref mirrorRepoRef, clusterSlug string) error {
 	name := nativeRefOf(ref)
 	return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
-		repo, _, err := loadNativeRepo(ctx, c, ref)
+		repo, clusters, err := loadNativeRepo(ctx, c, ref)
 		if err != nil {
 			return err
 		}
@@ -457,6 +463,14 @@ func runNativeMirrorRemove(cmd *cobra.Command, ref mirrorRepoRef, clusterSlug st
 				// Deliberately not %w-wrapped: renderCoreError would replace this
 				// with the server's own detail, which cannot name the command
 				// that lists where the repo actually is.
+				//
+				// The catalog is consulted only to WORD the miss, after the
+				// delete was attempted: refusing an unknown slug up front would
+				// also refuse to tear down a placement whose cluster has since
+				// left the catalog, which is the one case you most need to.
+				if _, known := clusterBySlug(clusters, clusterSlug); !known {
+					return fmt.Errorf("unknown cluster %q; available: %s", clusterSlug, strings.Join(clusterSlugs(clusters), ", "))
+				}
 				return fmt.Errorf("no mirror of %s on %s (run `entire repo mirror get %s` to see its placements)", name, clusterSlug, name)
 			}
 			return err
@@ -496,14 +510,21 @@ func runNativeMirrorGet(cmd *cobra.Command, ref mirrorRepoRef) error {
 		// in this table that says whether the primary is usable — and a dashed
 		// primary next to a "ready" mirror reads as broken. The authoritative
 		// read is the one that answers it (the same flag `repo view` exposes).
-		// Best-effort: a registry-only fallback cannot answer the readiness
-		// question, and losing the placements list over it would be a worse
-		// trade than a dash.
+		//
+		// Only `state` is taken from it, never the whole repo: an authoritative
+		// lifecycle response can omit clusterSlug and path (see the fixture in
+		// repo_readiness_test.go), and swapping the object wholesale would drop
+		// the primary placement and every clone URL this view exists to show.
+		// Best-effort for the same reason it is narrow — a registry-only
+		// fallback cannot answer the readiness question, and a dash is a better
+		// trade than losing the table.
 		if authoritative, aerr := c.GetRepo(ctx, coreapi.GetRepoParams{
 			RepoId:        repo.ID,
 			Authoritative: coreapi.NewOptBool(true),
 		}); aerr == nil {
-			repo = authoritative
+			if state, ok := authoritative.State.Get(); ok {
+				repo.State = coreapi.NewOptString(state)
+			}
 		}
 		row := nativeRepoDetailRow(name, repo, mirrors, clusters)
 		if jsonRequested(cmd) {

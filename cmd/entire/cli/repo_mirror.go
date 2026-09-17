@@ -307,7 +307,7 @@ func buildRepoDir(entries []coreapi.RepoIndexEntry, hostBySlug map[string]string
 		if name == "" {
 			name = e.Name
 		}
-		entryForge := forgeOfEntry(e)
+		entryForge, forgeFromProvider := forgeOfEntry(e)
 		private := strings.EqualFold(e.Visibility, "private")
 		if cand, ok := e.Candidate.Get(); ok {
 			status := "owner-only"
@@ -321,7 +321,7 @@ func buildRepoDir(entries []coreapi.RepoIndexEntry, hostBySlug map[string]string
 		var placements []repoDirPlacement
 		status := ""
 		for _, p := range e.Placements {
-			if !placementServesForge(p, entryForge) {
+			if !forgeFromProvider && !placementServesForge(p, entryForge) {
 				continue
 			}
 			clone := ""
@@ -402,32 +402,36 @@ func qualifyRepoRef(forge, ownerRepo string) string {
 // routes a repo, and keying the common path on it would invite exactly that
 // confusion. An entry with neither signal yields "" — a row in no forge's view,
 // rather than one bucketed into whichever is tested first.
-func forgeOfEntry(e coreapi.RepoIndexEntry) string {
+// It also reports whether `provider` is what answered. That matters to the
+// caller: the placement filter below may only be applied when it did NOT, since
+// the flag would then be both the classifier and the filter.
+func forgeOfEntry(e coreapi.RepoIndexEntry) (forge string, fromProvider bool) {
 	switch e.Provider.Or("") {
 	case repoProviderGitHub:
-		return mirrorCloneForge
+		return mirrorCloneForge, true
 	case repoProviderEntire:
-		return nativeCloneForge
+		return nativeCloneForge, true
 	}
 	// A candidate is a GitHub repo that could be onboarded. It has no provider
 	// and no placements — there is nothing placed yet — so it is recognised by
 	// being a candidate at all.
 	if _, ok := e.Candidate.Get(); ok {
-		return mirrorCloneForge
+		return mirrorCloneForge, true
 	}
 	if len(e.Placements) == 0 {
-		return ""
+		return "", false
 	}
 	if slices.ContainsFunc(e.Placements, func(p coreapi.RepoPlacement) bool { return p.Mirror }) {
-		return mirrorCloneForge
+		return mirrorCloneForge, false
 	}
-	return nativeCloneForge
+	return nativeCloneForge, false
 }
 
 // placementServesForge keeps a row's placements to the forge the row belongs
-// to. It matters only for an entry that carries both kinds, which the live
-// index does not produce — but the alternative is synthesising a /gh/ clone URL
-// for a native placement, a URL that would point nowhere.
+// to, for an entry that carries both kinds. It is applied ONLY when the
+// `mirror` flag is also what classified the row: once `provider` has answered,
+// re-deriving the forge per placement can only disagree with it, and a
+// disagreement empties the row and drops the repo from the directory entirely.
 func placementServesForge(p coreapi.RepoPlacement, forge string) bool {
 	return p.Mirror == (forge == mirrorCloneForge)
 }
@@ -438,12 +442,25 @@ const forgeFilterAll = "all"
 // entryServesForge reports whether an entry belongs in a directory filtered to
 // forge.
 func entryServesForge(e coreapi.RepoIndexEntry, forge string) bool {
-	return forge == forgeFilterAll || forgeOfEntry(e) == forge
+	entryForge, _ := forgeOfEntry(e)
+	return forge == forgeFilterAll || entryForge == forge
 }
 
-// mirrorRefOwner returns the owner segment of a forge-qualified directory name.
+// mirrorRefOwner returns the owner segment of a forge-qualified directory name
+// — the GitHub owner, or the Entire project. Whichever forge token leads is
+// dropped: stripping only `gh/` read "/et/acme/web" as owner "et", so
+// `--forge et --owner acme` matched nothing while `--owner et` matched every
+// native row. A value carrying no forge token is left alone rather than losing
+// its first segment.
 func mirrorRefOwner(ref string) string {
-	owner, _, _ := strings.Cut(strings.TrimPrefix(trimRefPrefix(ref), mirrorCloneForge+"/"), "/")
+	trimmed := trimRefPrefix(ref)
+	for _, forge := range []string{mirrorCloneForge, nativeCloneForge} {
+		if rest, ok := strings.CutPrefix(trimmed, forge+"/"); ok {
+			trimmed = rest
+			break
+		}
+	}
+	owner, _, _ := strings.Cut(trimmed, "/")
 	return owner
 }
 
@@ -592,6 +609,16 @@ func runMirrorAdd(cmd *cobra.Command, repoRef, clusterSlug string, opts mirrorAd
 		return err
 	}
 	if target.forge == nativeCloneForge {
+		// Shape-check before any network, the way the GitHub path does through
+		// clusterHostForSlug: a host passed here would otherwise reach the
+		// catalog lookup and be reported as an unknown cluster, when the real
+		// answer is that it is not a slug at all.
+		if clusterSlug != "" {
+			if err := validateClusterSlug(clusterSlug); err != nil {
+				cmd.SilenceUsage = true
+				return fmt.Errorf("invalid --cluster: %w", err)
+			}
+		}
 		return runNativeMirrorAdd(cmd, target, clusterSlug, opts)
 	}
 	owner, repo := target.owner, target.repo
