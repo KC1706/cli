@@ -486,7 +486,7 @@ func TestRepoRemoteUseCmd_FlagValidation(t *testing.T) {
 	}{
 		{name: "bad remote", args: []string{"--remote", "-f"}, want: "invalid --remote"},
 		{name: "bad upstream", args: []string{"--upstream", "bad name"}, want: "invalid --upstream"},
-		{name: "bad cluster flag", args: []string{"--cluster", "not a host"}, want: "invalid cluster host"},
+		{name: "bad cluster flag", args: []string{"--cluster", "not a host"}, want: "is not a cluster slug"},
 		{name: "a second positional is not a cluster host", args: []string{"github.com/a/b", "aws-us-east-2.entire.io"}, want: "accepts at most 1 arg"},
 	}
 	for _, tt := range tests {

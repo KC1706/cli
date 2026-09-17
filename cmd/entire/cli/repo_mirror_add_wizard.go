@@ -183,18 +183,22 @@ func regionLabel(r regionChoice) string {
 	}
 }
 
-// resolveOneShotClusterHost picks the cluster `repo mirror add
-// <repo>` targets when --cluster is omitted. Non-interactive
-// callers keep the fixed defaultClusterHost so scripts stay stable and
-// offline-resolvable; on a terminal the control plane's cluster catalog is
-// offered as a single-select (skipped when only one cluster exists),
-// pre-selecting the caller's jurisdiction default — the same
-// prompt-only-when-there-is-a-choice shape `repo clone` uses for
+// resolveOneShotClusterHost picks the cluster `repo mirror add <repo>` targets
+// when --cluster is omitted, and returns its public host — the coordinate
+// runCoreForCluster and the clone URL need, never a value the user typed.
+//
+// Non-interactive callers get defaultClusterSlug, so scripts stay stable. That
+// slug is resolved through the same catalog the picker enumerates rather than
+// being a hardcoded host: one spelling of a cluster, and it is the slug. The
+// catalog read is no longer skippable for this path, which is a fair price
+// — every caller that reaches here is about to make several control-plane
+// calls anyway.
+//
+// On a terminal the catalog is offered as a single-select (skipped when only
+// one cluster exists), pre-selecting the caller's jurisdiction default — the
+// same prompt-only-when-there-is-a-choice shape `repo clone` uses for
 // multi-cluster placements.
 func resolveOneShotClusterHost(cmd *cobra.Command) (string, error) {
-	if !interactive.CanPromptInteractively() {
-		return defaultClusterHost, nil
-	}
 	errW := cmd.ErrOrStderr()
 	var (
 		regions      []regionChoice
@@ -209,8 +213,11 @@ func resolveOneShotClusterHost(cmd *cobra.Command) (string, error) {
 		}
 		// The jurisdiction only pre-selects the picker's default; a /me
 		// hiccup shouldn't sink the create, so fall back to no pre-selection.
-		if me, merr := c.GetMe(ctx); merr == nil {
-			jurisdiction, _ = me.Jurisdiction.Get()
+		// Skipped entirely without a terminal, where nothing is pre-selected.
+		if interactive.CanPromptInteractively() {
+			if me, merr := c.GetMe(ctx); merr == nil {
+				jurisdiction, _ = me.Jurisdiction.Get()
+			}
 		}
 		stop(true)
 		return nil
@@ -220,11 +227,30 @@ func resolveOneShotClusterHost(cmd *cobra.Command) (string, error) {
 	if len(regions) == 0 {
 		return "", errors.New("no clusters available to mirror into; pass --cluster explicitly")
 	}
+	if !interactive.CanPromptInteractively() {
+		return hostForRegionSlug(regions, defaultClusterSlug)
+	}
 	if len(regions) == 1 {
-		fmt.Fprintf(errW, "Using cluster %s\n", regions[0].host)
+		fmt.Fprintf(errW, "Using cluster %s\n", regions[0].slug)
 		return regions[0].host, nil
 	}
 	return pickOneCluster(cmd.Context(), errW, regions, jurisdiction)
+}
+
+// hostForRegionSlug resolves the non-interactive default against the catalog
+// the picker would have shown. A default that is not in the catalog is an
+// error naming what is: silently mirroring into some other cluster because the
+// expected one went away is the one outcome a script cannot recover from.
+func hostForRegionSlug(regions []regionChoice, slug string) (string, error) {
+	known := make([]string, 0, len(regions))
+	for _, r := range regions {
+		if r.slug == slug {
+			return r.host, nil
+		}
+		known = append(known, r.slug)
+	}
+	sort.Strings(known)
+	return "", fmt.Errorf("default cluster %s is not in the control plane's catalog; pass --cluster explicitly (available: %s)", slug, strings.Join(known, ", "))
 }
 
 // pickOneCluster runs the one-shot add's cluster single-select,

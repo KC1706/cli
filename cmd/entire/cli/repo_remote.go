@@ -428,9 +428,9 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			"local git config — the mirror must already exist (`entire repo " +
 			"mirror add`); nothing server-side is changed.\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo remote use\n" +
-			"  entire repo remote use --cluster aws-us-east-2.entire.io\n" +
+			"  entire repo remote use --cluster aws-us-east-2\n" +
 			"  entire repo remote use /gh/octocat/hello-world\n" +
-			"  entire repo remote use /gh/octocat/hello-world --cluster aws-us-east-2.entire.io\n" +
+			"  entire repo remote use /gh/octocat/hello-world --cluster aws-us-east-2\n" +
 			"  entire repo remote use --remote entire\n" +
 			"  entire repo remote use --upstream ''",
 		Args: cobra.MaximumNArgs(1),
@@ -452,10 +452,10 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			if len(args) > 0 {
 				upstreamArg = strings.TrimSpace(args[0])
 			}
-			clusterHost := strings.TrimSpace(cluster)
-			if clusterHost != "" {
-				if err := validateClusterHost(clusterHost); err != nil {
-					return fmt.Errorf("invalid cluster host: %w", err)
+			clusterSlug := strings.TrimSpace(cluster)
+			if clusterSlug != "" {
+				if err := validateClusterSlug(clusterSlug); err != nil {
+					return fmt.Errorf("invalid --cluster: %w", err)
 				}
 			}
 
@@ -473,14 +473,23 @@ func newRepoRemoteUseCmd() *cobra.Command {
 
 			// The pull-gated placement lookup is the same authority the clone's
 			// STS exchange enforces, so anything the user could clone resolves
-			// here — public mirrors included.
-			var placements []coreapi.ResolvedPlacement
+			// here — public mirrors included. The catalog alongside it is what
+			// names each placement's cluster by the slug --cluster takes.
+			var (
+				placements []coreapi.ResolvedPlacement
+				clusters   []coreapi.Cluster
+			)
 			if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				ps, lerr := resolvePullablePlacements(ctx, c, owner, repo)
 				if lerr != nil {
 					return lerr
 				}
 				placements = ps
+				cat, cerr := c.ListClusters(ctx)
+				if cerr != nil {
+					return cerr
+				}
+				clusters = cat.Clusters
 				return nil
 			}); err != nil {
 				return err
@@ -489,7 +498,26 @@ func newRepoRemoteUseCmd() *cobra.Command {
 				return fmt.Errorf("%s/%s is not mirrored (or you have no access to its mirrors); create one first:\n  entire repo mirror add /gh/%s/%s", owner, repo, owner, repo)
 			}
 
-			chosen, err := selectPlacement(cmd, placements, clusterHost, placementPicker{
+			// --cluster names a slug; the picker matches on the host a placement
+			// carries, so resolve one to the other before selecting. An unknown
+			// slug is reported by selectPlacement against the repo's own
+			// placements ("not mirrored on X; available: ..."), which is a better
+			// answer here than the catalog's "unknown cluster".
+			clusterHost := ""
+			if clusterSlug != "" {
+				host, herr := hostForClusterSlug(clusters, clusterSlug)
+				if herr != nil {
+					// Deliberately swallowed: the catalog's "unknown cluster,
+					// available: <every cluster>" is the wrong answer here. The
+					// user is choosing among THIS repo's placements, so pass the
+					// slug through unresolved and let selectPlacement answer with
+					// the clusters this repo is actually mirrored on.
+					host = clusterSlug
+				}
+				clusterHost = host
+			}
+
+			chosen, err := selectPlacement(cmd, placements, clusterHost, clusterSlugByHost(clusters), placementPicker{
 				selector: "--cluster",
 				title:    fmt.Sprintf("%s/%s is mirrored on more than one cluster — pick the one to use", owner, repo),
 				action:   "Remote update",
@@ -541,6 +569,6 @@ func newRepoRemoteUseCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&remote, "remote", defaultMirrorRemote, "Git remote to point at the mirror")
 	cmd.Flags().StringVar(&upstream, "upstream", defaultMirrorUpstreamRemote, "Remote to preserve the replaced URL under; empty to discard it")
-	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster host to use when the repo is mirrored on several")
+	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster slug to use when the repo is mirrored on several, as `entire cluster list` prints it")
 	return cmd
 }

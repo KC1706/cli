@@ -55,12 +55,12 @@ func newRepoAccessListCmd() *cobra.Command {
 		Use:   cmdListRepo,
 		Short: "List the users with access to a mirror (live GitHub-admin gated)",
 		Long: "Lists the principals that can pull the mirror of <repo> on " +
-			"the cluster named by --cluster (default " + defaultClusterHost + "), " +
+			"the cluster named by --cluster (default " + defaultClusterSlug + "), " +
 			"with their reader/writer role resolved from the control plane. The " +
 			"caller must be a live GitHub admin of the upstream (org repo) or its " +
 			"owner (user repo).\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo access list /gh/acme/widget\n" +
-			"  entire repo access list /gh/acme/widget --cluster aws-eu-central-1.entire.io",
+			"  entire repo access list /gh/acme/widget --cluster aws-eu-central-1",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			owner, repo, err := parseGitHubMirrorRepoRef(args[0])
@@ -75,8 +75,8 @@ func newRepoAccessListCmd() *cobra.Command {
 				}
 				return err
 			}
-			clusterHost := cluster
-			if err := validateClusterHost(clusterHost); err != nil {
+			clusterHost, err := clusterHostForSlug(cmd, cluster)
+			if err != nil {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid --cluster: %w", err)
 			}
@@ -94,7 +94,7 @@ func newRepoAccessListCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&cluster, "cluster", defaultClusterHost, "Cluster host the mirror is on")
+	cmd.Flags().StringVar(&cluster, "cluster", defaultClusterSlug, "Cluster slug the mirror is on, as `entire cluster list` prints it")
 	addJSONFlag(cmd)
 	return cmd
 }

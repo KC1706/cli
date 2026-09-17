@@ -68,11 +68,14 @@ the commands are always runnable in every build.
   `repo mirror list` already make to map slugs to hosts) sorted by region then
   slug. The table's columns are the values other commands take: REGION is the
   jurisdiction slug behind `org create --region` and `project create
-  --region`; CLUSTER is the placement slug `repo mirror list --cluster`
-  accepts; HOST is the bare public host behind `repo create --cluster-host`,
-  `repo mirror add` and `repo clone --cluster`, reduced through
-  `hostFromPublicURL` so a publicUrl that fails validation renders `-` rather
-  than a spoofable host. `--json` is the wire model, `apiUrl` and `isDefault`
+  --region`; CLUSTER is the placement slug **every** `--cluster` takes (`repo
+  mirror add`/`remove`/`list`, `repo access list`, `repo clone`, `repo remote
+  use`); HOST is the bare public host those commands resolve that slug to,
+  reduced through `hostFromPublicURL` so a publicUrl that fails validation
+  renders `-` rather than a spoofable host. The host is an internal coordinate
+  — it is what goes into an `entire://` clone URL and what `runCoreForCluster`
+  dials — and is shown so a reader can tell which row a clone URL came from,
+  not because any flag takes it. `--json` is the wire model, `apiUrl` and `isDefault`
   included, plus a synthesized `host` merged into each object
   (`clusterJSON`, via the additive-only `mergeSynthesizedField` that `repo
   create` uses for `remote`): the same validated host the table shows, absent
@@ -98,6 +101,14 @@ the commands are always runnable in every build.
   only). Verb names follow the GitHub CLI where the job is the same (`view`,
   `edit --visibility`, `auth switch`), per the unified-repo-commands proto.
   Git content operations (log, diff, …) are intentionally out of scope.
+  **A cluster is named one way too, by its catalog slug** (`aws-us-east-2`, the
+  CLUSTER column of `entire cluster list`): every `--cluster` takes one, and the
+  public host it resolves to — through `clusterHostForSlug`, one `GET /clusters`
+  — is never typed, only seen inside an `entire://` URL. A host passed to
+  `--cluster` is refused rather than accepted as a second spelling, including by
+  `repo mirror list`'s client-side filter, where silently matching nothing would
+  be the alternative. `repo create` takes no cluster at all: a repo's home
+  cluster is the primary cell of its owning project's region.
   `protection` (`list`, `add [--server-side-merge-only]`, `remove`) edits a
   native repo's branch-protection rules through core's
   `/repos/{repoId}/branch-protection` resource: `add` and `remove` are one
@@ -108,7 +119,7 @@ the commands are always runnable in every build.
   is the explicit way down. A short branch name expands to `refs/heads/`,
   `HEAD` and `refs/...` pass through. The `mirror` subtree is
   server-side (`add`, `list`, `get`, `remove`; `add` and `remove` name the
-  cluster with `--cluster <host>`). `remote use` repoints the *current clone's*
+  cluster with `--cluster <slug>`). `remote use` repoints the *current clone's*
   git remote at a mirror (local git config only — it creates nothing
   server-side). Interactively it picks among the repo's placements and asks
   whether to replace the remote (preserving the old URL under `--upstream`) or

@@ -462,12 +462,15 @@ func TestRepoMirrorAdd_AsyncDefaultWhenSettingsFail(t *testing.T) {
 	previousClient := clusterCoreClient
 	clusterCoreClient = func(context.Context, string) (*coreapi.Client, error) { return client, nil }
 	t.Cleanup(func() { clusterCoreClient = previousClient })
+	// --cluster names a catalog slug, so the command resolves it against the
+	// active context's catalog before dialling the cluster's own core.
+	serveClusters(t, testClusterCatalog)
 
 	cmd := newRepoCmd()
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"mirror", "add", "--no-wait", "--cluster", "aws-us-east-2.entire.io", "/gh/owner/repo"})
+	cmd.SetArgs([]string{"mirror", "add", "--no-wait", "--cluster", defaultClusterSlug, "/gh/owner/repo"})
 	require.NoError(t, cmd.ExecuteContext(t.Context()))
 	require.Contains(t, stdout.String(), "Mirror placed at entire://cluster/gh/owner/repo")
 	require.Contains(t, stdout.String(), "Mirror ID: mirror-1")

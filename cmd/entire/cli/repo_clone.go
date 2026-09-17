@@ -349,7 +349,7 @@ func newRepoCloneCmd() *cobra.Command {
 		Example: "  entire repo clone /et/project/example\n" +
 			"  entire repo clone /gh/entirehq/entire-api\n" +
 			"  entire repo clone /gh/entirehq/entire-api ./entire-api\n" +
-			"  entire repo clone /gh/entirehq/entire-api --cluster aws-us-east-2.entire.io\n" +
+			"  entire repo clone /gh/entirehq/entire-api --cluster aws-us-east-2\n" +
 			"  entire repo clone entire://aws-us-east-2.entire.io/gh/entirehq/entire-api",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -414,21 +414,44 @@ func newRepoCloneCmd() *cobra.Command {
 				placements = ps
 				return nil
 			}
+			// Shape-check --cluster before anything is dialled, so a malformed
+			// value fails locally rather than after a round trip.
+			if cluster != "" {
+				if err := validateClusterSlug(cluster); err != nil {
+					return fmt.Errorf("invalid --cluster: %w", err)
+				}
+			}
+
+			// The catalog is what turns the slug the user types into the host
+			// everything downstream needs, and back again for the picker's
+			// labels, so it is fetched once here from the active context.
+			clusters, err := fetchClusterCatalog(cmd)
+			if err != nil {
+				return err
+			}
+
 			// An explicit --cluster may name a cluster in a different federation
 			// than the active context, whose mirrors the active-context core can't
 			// see (the original bug: cloning a royalcanin.partial.to mirror while a
 			// different context is active failed with "not mirrored on ..."). Dial
 			// the core fronting that cluster — discovered from its well-known and
 			// authenticated with the matching local context, the same path
-			// `mirror add <repo> --cluster <host>` uses — so the lookup resolves against
-			// the right federation. With no --cluster, list from the active context.
+			// `mirror add <repo> --cluster <slug>` uses — so the lookup resolves
+			// against the right federation. With no --cluster, list from the active
+			// context.
+			//
+			// A foreign federation's cluster is not in the active context's catalog,
+			// so its slug cannot resolve here. That is not a lost capability: a full
+			// entire:// URL names the host outright and this command forwards it to
+			// git with no lookup at all, which is the same clone. The error says so.
 			runWithCore := runCore
+			clusterHost := ""
 			if cluster != "" {
-				if err := validateClusterHost(cluster); err != nil {
-					return fmt.Errorf("invalid --cluster: %w", err)
+				if clusterHost, err = hostForClusterSlug(clusters, cluster); err != nil {
+					return fmt.Errorf("invalid --cluster: %w; to clone from a cluster outside this login's federation, pass its full %s<cluster>/%s/%s/%s URL instead", err, entireCloneURLScheme, mirrorCloneForge, owner, repo)
 				}
 				runWithCore = func(cmd *cobra.Command, fn func(context.Context, *coreapi.Client) error) error {
-					return runCoreForCluster(cmd, cluster, fn)
+					return runCoreForCluster(cmd, clusterHost, fn)
 				}
 			}
 			if err := runWithCore(cmd, lister); err != nil {
@@ -439,7 +462,7 @@ func newRepoCloneCmd() *cobra.Command {
 				return fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror add /gh/%s/%s' to onboard it", owner, repo, owner, repo)
 			}
 
-			chosen, err := selectCloneTarget(cmd, placements, cluster)
+			chosen, err := selectCloneTarget(cmd, placements, clusterHost, clusterSlugByHost(clusters))
 			if err != nil {
 				return err
 			}
@@ -455,7 +478,7 @@ func newRepoCloneCmd() *cobra.Command {
 			return runGitClone(cmd.Context(), cmd, cloneURL, targetDir)
 		},
 	}
-	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster host to clone from when the repo is mirrored on more than one (may belong to another auth context)")
+	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster slug to clone from when the repo is mirrored on more than one, as `entire cluster list` prints it")
 	return cmd
 }
 
@@ -541,8 +564,8 @@ type placementPicker struct {
 
 // selectCloneTarget resolves which mirror placement to clone from, with the
 // clone verb's wording. See selectPlacement for the selection rules.
-func selectCloneTarget(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterFlag string) (coreapi.ResolvedPlacement, error) {
-	return selectPlacement(cmd, placements, clusterFlag, placementPicker{
+func selectCloneTarget(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterHost string, slugByHost map[string]string) (coreapi.ResolvedPlacement, error) {
+	return selectPlacement(cmd, placements, clusterHost, slugByHost, placementPicker{
 		selector: "--cluster",
 		title:    "This repo is mirrored on more than one cluster — pick one to clone from",
 		action:   "Clone",
@@ -550,14 +573,21 @@ func selectCloneTarget(cmd *cobra.Command, placements []coreapi.ResolvedPlacemen
 }
 
 // selectPlacement resolves which mirror placement a verb should act on. With one
-// placement it returns it directly. With an explicit clusterSel it picks the
-// matching one (or errors listing the available hosts). With more than one and no
-// selector it prompts interactively, failing fast with a p.selector pointer when
-// there's no terminal.
-func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterSel string, p placementPicker) (coreapi.ResolvedPlacement, error) {
+// placement it returns it directly. With an explicit clusterHost it picks the
+// matching one (or errors listing the available clusters). With more than one and
+// no selector it prompts interactively, failing fast with a p.selector pointer
+// when there's no terminal.
+//
+// Matching is on the HOST, because that is the coordinate a placement carries;
+// the caller has already turned the slug the user typed into one. Everything the
+// user READS is a slug, though — the "available" lists and the picker's labels
+// — since that is what they would type back. slugByHost is the catalog's
+// mapping; a host missing from it falls back to naming itself, so a placement on
+// a cluster the catalog does not list is still selectable rather than invisible.
+func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterHost string, slugByHost map[string]string, p placementPicker) (coreapi.ResolvedPlacement, error) {
 	// Dedupe by cluster host: one placement per cluster is what a caller acts on,
 	// and the same host appearing twice would only confuse the picker. Key on the
-	// case-folded host — DNS is case-insensitive, so a selector value differing
+	// case-folded host — DNS is case-insensitive, so a resolved host differing
 	// only in case from the API's ClusterHost must still match (the alternative is
 	// a misleading "not mirrored on ..." after a successful lookup + dial).
 	byHost := make(map[string]coreapi.ResolvedPlacement, len(placements))
@@ -571,11 +601,21 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 		hosts = append(hosts, key)
 	}
 	sort.Strings(hosts)
+	slugOf := func(host string) string {
+		if slug := slugByHost[host]; slug != "" {
+			return slug
+		}
+		return host
+	}
+	slugs := make([]string, len(hosts))
+	for i, h := range hosts {
+		slugs[i] = slugOf(h)
+	}
 
-	if clusterSel != "" {
-		match, ok := byHost[strings.ToLower(strings.TrimSpace(clusterSel))]
+	if clusterHost != "" {
+		match, ok := byHost[strings.ToLower(strings.TrimSpace(clusterHost))]
 		if !ok {
-			return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is not mirrored on %q; available: %s", clusterSel, strings.Join(hosts, ", "))
+			return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is not mirrored on %q; available: %s", slugOf(strings.ToLower(clusterHost)), strings.Join(slugs, ", "))
 		}
 		return match, nil
 	}
@@ -585,12 +625,12 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 
 	if !interactive.CanPromptInteractively() {
-		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is mirrored on %d clusters; pass %s to choose one of: %s", len(hosts), p.selector, strings.Join(hosts, ", "))
+		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is mirrored on %d clusters; pass %s to choose one of: %s", len(hosts), p.selector, strings.Join(slugs, ", "))
 	}
 
 	options := make([]huh.Option[string], len(hosts))
 	for i, h := range hosts {
-		options[i] = huh.NewOption(mirrorCellLabel(byHost[h]), h)
+		options[i] = huh.NewOption(mirrorCellLabel(byHost[h], slugOf(h)), h)
 	}
 	var selected string
 	form := NewAccessibleForm(
@@ -624,17 +664,22 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 
 // mirrorCellLabel is the human label for a mirror placement in the clone picker:
 // the physical cell and jurisdiction when known, always anchored by the cluster
-// host that goes into the clone URL.
-func mirrorCellLabel(p coreapi.ResolvedPlacement) string {
+// SLUG — the value the same command takes as --cluster, so a reader who cancels
+// the picker knows what to type next.
+func mirrorCellLabel(p coreapi.ResolvedPlacement, slug string) string {
 	cell := strings.TrimSpace(p.Cell.Or(""))
 	jur := strings.TrimSpace(p.Jurisdiction.Or(""))
 	switch {
-	case cell != "" && jur != "":
-		return fmt.Sprintf("%s (%s) — %s", cell, jur, p.ClusterHost)
-	case cell != "":
-		return fmt.Sprintf("%s — %s", cell, p.ClusterHost)
+	// The cell and the slug are routinely the same string (both name the
+	// region, e.g. aws-us-east-2); repeating it would read as a mistake.
+	case cell != "" && cell != slug && jur != "":
+		return fmt.Sprintf("%s (%s) — %s", cell, jur, slug)
+	case jur != "":
+		return fmt.Sprintf("%s (%s)", slug, jur)
+	case cell != "" && cell != slug:
+		return fmt.Sprintf("%s — %s", cell, slug)
 	default:
-		return p.ClusterHost
+		return slug
 	}
 }
 

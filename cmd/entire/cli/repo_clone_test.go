@@ -425,7 +425,7 @@ func TestRepoClone_NativeRefRejectsClusterFlag(t *testing.T) {
 	cmd := newRepoCloneCmd()
 	cmd.SetOut(&nopWriter{})
 	cmd.SetErr(&nopWriter{})
-	cmd.SetArgs([]string{"/et/paul/dogbark", "--cluster", "aws-us-east-2.entire.io"})
+	cmd.SetArgs([]string{"/et/paul/dogbark", "--cluster", "aws-us-east-2"})
 	err := cmd.ExecuteContext(t.Context())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "--cluster applies to /gh/ mirror refs")
@@ -463,51 +463,77 @@ func TestMirrorCellLabel(t *testing.T) {
 	tests := []struct {
 		name   string
 		mirror coreapi.ResolvedPlacement
+		slug   string
 		want   string
 	}{
 		{
-			name:   "host only",
+			name:   "slug alone when nothing else is known",
 			mirror: coreapi.ResolvedPlacement{ClusterHost: "aws-us-east-2.entire.io"},
-			want:   "aws-us-east-2.entire.io",
+			slug:   "aws-us-east-2",
+			want:   "aws-us-east-2",
 		},
 		{
-			name: "cell and jurisdiction",
+			// The common shape: cell and slug are the same string, so the label
+			// states it once and adds the region.
+			name: "jurisdiction qualifies the slug",
 			mirror: coreapi.ResolvedPlacement{
 				ClusterHost:  "aws-us-east-2.entire.io",
 				Cell:         coreapi.NewOptString("aws-us-east-2"),
 				Jurisdiction: coreapi.NewOptString("us"),
 			},
-			want: "aws-us-east-2 (us) — aws-us-east-2.entire.io",
+			slug: "aws-us-east-2",
+			want: "aws-us-east-2 (us)",
 		},
 		{
-			name: "cell without jurisdiction",
+			name: "a cell that differs from the slug is kept",
+			mirror: coreapi.ResolvedPlacement{
+				ClusterHost:  "aws-us-east-2.entire.io",
+				Cell:         coreapi.NewOptString("cell-7"),
+				Jurisdiction: coreapi.NewOptString("us"),
+			},
+			slug: "aws-us-east-2",
+			want: "cell-7 (us) — aws-us-east-2",
+		},
+		{
+			name: "a differing cell without a jurisdiction",
 			mirror: coreapi.ResolvedPlacement{
 				ClusterHost: "aws-us-east-2.entire.io",
-				Cell:        coreapi.NewOptString("aws-us-east-2"),
+				Cell:        coreapi.NewOptString("cell-7"),
 			},
-			want: "aws-us-east-2 — aws-us-east-2.entire.io",
+			slug: "aws-us-east-2",
+			want: "cell-7 — aws-us-east-2",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tt.want, mirrorCellLabel(tt.mirror))
+			require.Equal(t, tt.want, mirrorCellLabel(tt.mirror, tt.slug))
 		})
 	}
 }
 
-// TestRepoClone_InvalidClusterFlag locks in that a malformed --cluster is
-// rejected up front (before any core is dialled), so the anti-token-leak guard
-// validateClusterHost applies to the user-supplied cluster the clone routes to.
+// TestRepoClone_InvalidClusterFlag locks in that a --cluster that is not a bare
+// catalog slug is rejected up front, before any core is dialled. The host form
+// is in the table because it is what this flag used to take, and the spoofing
+// vector because a value that reaches a URL must never carry userinfo.
 func TestRepoClone_InvalidClusterFlag(t *testing.T) {
 	t.Parallel()
-	cmd := newRepoCloneCmd()
-	cmd.SetOut(&nopWriter{})
-	cmd.SetErr(&nopWriter{})
-	cmd.SetArgs([]string{"/gh/entirehq/entire-api", "--cluster", "aws-us-east-2.entire.io@evil.com"})
-	err := cmd.ExecuteContext(t.Context())
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid --cluster")
+	for _, cluster := range []string{
+		"aws-us-east-2.entire.io@evil.com",
+		"aws-us-east-2.entire.io",
+		"https://aws-us-east-2.entire.io",
+	} {
+		t.Run(cluster, func(t *testing.T) {
+			t.Parallel()
+			cmd := newRepoCloneCmd()
+			cmd.SetOut(&nopWriter{})
+			cmd.SetErr(&nopWriter{})
+			cmd.SetArgs([]string{"/gh/entirehq/entire-api", "--cluster", cluster})
+			err := cmd.ExecuteContext(t.Context())
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "invalid --cluster")
+		})
+	}
 }
 
 func newCloneTestCmd() *cobra.Command {
@@ -526,51 +552,71 @@ func TestSelectCloneTarget(t *testing.T) {
 
 	usEast := coreapi.ResolvedPlacement{ClusterHost: "aws-us-east-2.entire.io"}
 	euWest := coreapi.ResolvedPlacement{ClusterHost: "aws-eu-west-1.entire.io"}
+	// The catalog mapping the caller resolved the slug through; the picker uses
+	// it only to SHOW clusters, matching on the host it was handed.
+	slugByHost := map[string]string{
+		"aws-us-east-2.entire.io":  "aws-us-east-2",
+		"aws-eu-west-1.entire.io":  "aws-eu-west-1",
+		"aws-ap-south-1.entire.io": "aws-ap-south-1",
+	}
 
 	t.Run("single placement returns directly", func(t *testing.T) {
 		t.Parallel()
-		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast}, "")
+		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast}, "", slugByHost)
 		require.NoError(t, err)
 		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
 	})
 
 	t.Run("dedupes repeated host to a single placement", func(t *testing.T) {
 		t.Parallel()
-		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, usEast}, "")
+		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, usEast}, "", slugByHost)
 		require.NoError(t, err)
 		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
 	})
 
-	t.Run("--cluster picks the matching placement", func(t *testing.T) {
+	t.Run("the resolved host picks the matching placement", func(t *testing.T) {
 		t.Parallel()
-		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-eu-west-1.entire.io")
+		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-eu-west-1.entire.io", slugByHost)
 		require.NoError(t, err)
 		require.Equal(t, "aws-eu-west-1.entire.io", got.ClusterHost)
 	})
 
-	t.Run("--cluster matches case-insensitively", func(t *testing.T) {
+	t.Run("the resolved host matches case-insensitively", func(t *testing.T) {
 		t.Parallel()
-		// DNS hosts are case-insensitive: a mixed-case --cluster must still match
-		// the API's lowercase ClusterHost rather than falsely "not mirrored".
-		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "AWS-EU-West-1.Entire.IO")
+		// DNS hosts are case-insensitive: a mixed-case host must still match the
+		// API's lowercase ClusterHost rather than falsely "not mirrored".
+		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "AWS-EU-West-1.Entire.IO", slugByHost)
 		require.NoError(t, err)
 		require.Equal(t, "aws-eu-west-1.entire.io", got.ClusterHost)
 	})
 
-	t.Run("--cluster with no match errors and lists hosts", func(t *testing.T) {
+	// Everything the reader sees is a slug, because that is what they would type
+	// back into --cluster; the host is an internal coordinate.
+	t.Run("no match errors naming the clusters as slugs", func(t *testing.T) {
 		t.Parallel()
-		_, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-ap-south-1.entire.io")
+		_, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-ap-south-1.entire.io", slugByHost)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "aws-us-east-2")
+		require.Contains(t, err.Error(), "aws-eu-west-1")
+		require.NotContains(t, err.Error(), ".entire.io")
+	})
+
+	// A placement on a cluster the catalog does not list must stay selectable:
+	// naming it by host is worse than the slug, and far better than hiding it.
+	t.Run("a cluster missing from the catalog names itself", func(t *testing.T) {
+		t.Parallel()
+		_, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "nope.entire.io", nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "aws-us-east-2.entire.io")
-		require.Contains(t, err.Error(), "aws-eu-west-1.entire.io")
 	})
 
 	t.Run("multiple placements with no terminal errors with a --cluster pointer", func(t *testing.T) {
 		t.Parallel()
 		// go test is non-interactive, so the picker path is unreachable here.
-		_, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "")
+		_, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", slugByHost)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "--cluster")
+		require.Contains(t, err.Error(), "aws-eu-west-1")
 	})
 }
 
