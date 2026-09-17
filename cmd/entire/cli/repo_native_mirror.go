@@ -493,6 +493,19 @@ func runNativeMirrorGet(cmd *cobra.Command, ref mirrorRepoRef) error {
 		if err != nil {
 			return err
 		}
+		// A plain repo read leaves `state` unset, which would dash the one cell
+		// in this table that says whether the primary is usable — and a dashed
+		// primary next to a "ready" mirror reads as broken. The authoritative
+		// read is the one that answers it (the same flag `repo view` exposes).
+		// Best-effort: a registry-only fallback cannot answer the readiness
+		// question, and losing the placements list over it would be a worse
+		// trade than a dash.
+		if authoritative, aerr := c.GetRepo(ctx, coreapi.GetRepoParams{
+			RepoId:        repo.ID,
+			Authoritative: coreapi.NewOptBool(true),
+		}); aerr == nil {
+			repo = authoritative
+		}
 		row := nativeRepoDetailRow(name, repo, mirrors, clusters)
 		if jsonRequested(cmd) {
 			return printJSON(cmd.OutOrStdout(), row)

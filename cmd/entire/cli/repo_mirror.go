@@ -892,9 +892,19 @@ func runRepoMirrorList(cmd *cobra.Command, o repoMirrorListOpts) error {
 	// keeps the workflow discoverable without corrupting a piped table, and
 	// is skipped for --json (scripts get nested placements in the rows
 	// already).
+	// The hint names the shape of the refs in the table it follows, so copying
+	// a NAME cell into it actually works. Under --forge all both shapes are
+	// present, so it names the column instead of picking one.
+	detailRef := "/" + o.forge + "/<owner>/<repo>"
+	switch o.forge {
+	case nativeCloneForge:
+		detailRef = "/" + nativeCloneForge + "/<project>/<repo>"
+	case forgeFilterAll:
+		detailRef = "<name from the NAME column>"
+	}
 	hintDetail := func(err error) error {
 		if err == nil && listedAny && !jsonRequested(cmd) {
-			fmt.Fprintln(cmd.ErrOrStderr(), "\nPer-cluster detail and clone URLs: entire repo mirror get /gh/<owner>/<repo>")
+			fmt.Fprintln(cmd.ErrOrStderr(), "\nPer-cluster detail and clone URLs: entire repo mirror get "+detailRef)
 		}
 		return err
 	}
