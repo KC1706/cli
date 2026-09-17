@@ -315,3 +315,42 @@ func (f *fakeExternalAgent) ReadSession(_ *agent.HookInput) (*agent.AgentSession
 }
 func (f *fakeExternalAgent) WriteSession(_ context.Context, _ *agent.AgentSession) error { return nil }
 func (f *fakeExternalAgent) FormatResumeCommand(_ string) string                         { return "" }
+
+// An older checkpoint carries the agent only at the top level, and its session
+// entries have none. Skipping those made an entire restore a no-op — the most
+// common of the skip reasons, not a rare one — so the checkpoint's own agent is
+// the fallback.
+func TestRestoreLogsOnly_FallsBackToCheckpointAgent(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { repo.Close() })
+
+	agentName := types.AgentName("checkpoint-agent-fallback")
+	agentType := types.AgentType("Checkpoint Agent Fallback")
+	sessionDir := filepath.Join(dir, "fallback-sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o750))
+	agent.Register(agentName, func() agent.Agent {
+		return &restoreLogsOnlyAgent{name: agentName, agentType: agentType, sessionDir: sessionDir}
+	})
+
+	cpID := id.MustCheckpointID("acacacacacac")
+	const sessionID = "legacy-session"
+	transcript := []byte(`{"type":"user","timestamp":"2025-01-02T10:00:00Z","message":{"content":[{"type":"text","text":"legacy"}]}}` + "\n")
+	// No per-session agent, exactly as an older checkpoint records it.
+	writeCommittedCheckpoint(t, repo, cpID, sessionID, "", transcript, time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
+
+	var stdout, stderr bytes.Buffer
+	restored, err := NewManualCommitStrategy().RestoreLogsOnly(context.Background(), &stdout, &stderr,
+		PendingCheckpoint{IsLogsOnly: true, CheckpointID: cpID, Agent: agentType}, false)
+	require.NoError(t, err, "stderr: %s", stderr.String())
+	require.Len(t, restored, 1, "stderr: %s", stderr.String())
+	require.NotContains(t, stderr.String(), "has no agent metadata")
+
+	got, err := os.ReadFile(filepath.Join(sessionDir, sessionID+".jsonl"))
+	require.NoError(t, err)
+	require.Equal(t, string(transcript), string(got))
+}

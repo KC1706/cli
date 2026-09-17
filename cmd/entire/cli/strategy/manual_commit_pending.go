@@ -391,14 +391,21 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 			continue
 		}
 
-		// Resolve per-session agent from metadata — skip if agent is unknown
-		if content.Metadata.Agent == "" {
+		// Per-session agent metadata, falling back to the checkpoint's own agent.
+		// Older checkpoints carry the agent only at the top level, and skipping
+		// them turned a whole multi-session restore into a no-op — the most
+		// common of the six skip reasons, not a rare one.
+		sessionAgentName := content.Metadata.Agent
+		if sessionAgentName == "" {
+			sessionAgentName = point.Agent
+		}
+		if sessionAgentName == "" {
 			fmt.Fprintf(errW, "  Warning: session %d (%s) has no agent metadata, skipping (cannot determine target directory)\n", i, sessionID)
 			continue
 		}
-		sessionAgent, agErr := ResolveAgentForResume(content.Metadata.Agent)
+		sessionAgent, agErr := ResolveAgentForResume(sessionAgentName)
 		if agErr != nil {
-			fmt.Fprintf(errW, "  Warning: session %d (%s) has unknown agent %q, skipping\n", i, sessionID, content.Metadata.Agent)
+			fmt.Fprintf(errW, "  Warning: session %d (%s) has unknown agent %q, skipping\n", i, sessionID, sessionAgentName)
 			continue
 		}
 

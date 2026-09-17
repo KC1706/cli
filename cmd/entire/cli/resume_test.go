@@ -1732,3 +1732,50 @@ func TestGetMetadataTree_SucceedsWithLocalBranch(t *testing.T) {
 		t.Fatal("getMetadataTree() returned nil repo")
 	}
 }
+
+// The multi-session half of PreservesSafeSingleSessionNoTranscriptFallback. A
+// checkpoint whose sessions all carry SAFE IDs but no transcript restores
+// nothing, and must still say so: gating the fallback on the session count made
+// this exit 0 having printed "Restoring 2 sessions from checkpoint:" and
+// nothing else, which is indistinguishable from a successful resume.
+func TestRestoreResumeSessions_PreservesSafeMultiSessionNoTranscriptFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
+	cleanupResumeTestRepo(t, repo, tmpDir)
+	ag := &recordingResumeAgent{sessionDir: filepath.Join(tmpDir, "sessions")}
+	t.Cleanup(agent.SnapshotRegistryForTesting())
+	agent.Register(ag.Name(), func() agent.Agent { return ag })
+
+	cpID := id.MustCheckpointID("dadadadadada")
+	createdAt := time.Now()
+	for i := range 2 {
+		writeCommittedResumeCheckpointWithTranscript(t, repo, cpID,
+			fmt.Sprintf("safe-session-%d", i), createdAt.Add(time.Duration(i)*time.Second), ag.Type(), nil)
+	}
+
+	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
+	info, err := readCheckpointInfoFromStore(t.Context(), store, cpID)
+	if err != nil {
+		t.Fatalf("read checkpoint metadata: %v", err)
+	}
+	if info.SessionCount < 2 {
+		t.Fatalf("checkpoint metadata session count = %d, want a multi-session checkpoint", info.SessionCount)
+	}
+
+	var stdout, stderr bytes.Buffer
+	restored, err := restoreResumeSessions(t.Context(), &stdout, &stderr, info, false)
+	if err != nil {
+		t.Fatalf("restoreResumeSessions() error = %v", err)
+	}
+	if len(restored) != 0 {
+		t.Fatalf("restored sessions = %#v, want none", restored)
+	}
+	if !strings.Contains(stdout.String(), "session log not available") {
+		t.Fatalf("stdout = %q, want the missing-log message rather than a silent no-op", stdout.String())
+	}
+	if want := ag.FormatResumeCommand(info.SessionID); !strings.Contains(stdout.String(), want) {
+		t.Fatalf("stdout = %q, want resume command %q", stdout.String(), want)
+	}
+}

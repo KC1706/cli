@@ -920,11 +920,33 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	}
 
 	sessions, restoreErr := strat.RestoreLogsOnly(ctx, w, errW, point, force)
-	isMultiSession := metadata.SessionCount > 1 || len(metadata.SessionIDs) > 1
 	sessionIDErr := validation.ValidateSessionID(sessionID)
-	if sessionIDErr == nil && (restoreErr != nil || (len(sessions) == 0 && !isMultiSession)) {
-		// Preserve the single-session fallback for missing logs and older
-		// checkpoints, but never retry an unsafe ID that RestoreLogsOnly skipped.
+
+	// Nothing was restored. Two different situations reach this point and only
+	// one of them may fall back, so they are told apart here rather than by the
+	// session count, which says nothing about either.
+	//
+	// A checkpoint carrying an unsafe session ID was tampered with, and falling
+	// back would quietly restore the top-level session instead of reporting
+	// that. An ordinary skip — an unreadable shard, an empty transcript, no
+	// per-session agent metadata — is the case the fallback has always existed
+	// for, and suppressing it for every multi-session checkpoint made `entire
+	// resume` exit 0 having printed "Restoring N sessions from checkpoint:" and
+	// nothing else.
+	if restoreErr == nil && len(sessions) == 0 {
+		for _, storedSessionID := range metadata.SessionIDs {
+			if err := validation.ValidateSessionID(storedSessionID); err != nil {
+				return nil, fmt.Errorf("unsafe checkpoint session ID %q: %w", storedSessionID, err)
+			}
+		}
+		if sessionIDErr != nil {
+			return nil, fmt.Errorf("unsafe checkpoint session ID %q: %w", sessionID, sessionIDErr)
+		}
+	}
+
+	if sessionIDErr == nil && (restoreErr != nil || len(sessions) == 0) {
+		// The single-session fallback, for missing logs and for older
+		// checkpoints without per-session agent metadata.
 		ag, err := strategy.ResolveAgentForResume(metadata.Agent)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve agent: %w", err)
@@ -941,16 +963,6 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	}
 	if restoreErr != nil {
 		return nil, fmt.Errorf("failed to restore session logs: %w", restoreErr)
-	}
-	if len(sessions) == 0 {
-		for _, storedSessionID := range metadata.SessionIDs {
-			if err := validation.ValidateSessionID(storedSessionID); err != nil {
-				return nil, fmt.Errorf("unsafe checkpoint session ID %q: %w", storedSessionID, err)
-			}
-		}
-		if sessionIDErr != nil {
-			return nil, fmt.Errorf("unsafe checkpoint session ID %q: %w", sessionID, sessionIDErr)
-		}
 	}
 
 	logging.Debug(logCtx, "resume session completed",

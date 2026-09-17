@@ -515,12 +515,25 @@ Used as input to `write-session` and output from `read-session`.
 | `session_id` | string | Agent session identifier |
 | `agent_name` | string | Agent registry name |
 | `repo_path` | string | Absolute path to the repository |
-| `session_ref` | string | Path/reference to session in agent's storage |
+| `session_ref` | string | Path/reference to session in agent's storage. Constrained — see [session_ref constraints](#session_ref-constraints) |
 | `start_time` | string | RFC 3339 timestamp of session start |
 | `native_data` | bytes/null | Session content in agent's native format (opaque to CLI) |
 | `modified_files` | string[] | Files modified during the session |
 | `new_files` | string[] | Files created during the session |
 | `deleted_files` | string[] | Files deleted during the session |
+
+### session_ref constraints
+
+`session_ref` stays agent-defined: a plugin backed by a database may return an opaque key rather than a path, and the CLI forwards such a value to `write-session` unchanged. Two rules apply to every `session_ref` regardless of shape, and a third applies only to the ones that are unambiguously filesystem paths.
+
+Always:
+
+- It must not be rooted (`/sessions/abc.jsonl` with no volume).
+- Once cleaned it must not escape its own base, so `../outside.jsonl` and `nested/../../outside.jsonl` are refused. An opaque key that merely *contains* a dot segment without escaping, such as `tenant/../session-key`, is forwarded as given.
+
+When the value is absolute or carries a volume name, the CLI treats it as a filesystem path and additionally requires that it contain no `.` or `..` component, and that it resolve inside the directory the plugin itself reported from `get-session-dir`. A ref that resolves outside that directory is refused before `write-session` is spawned.
+
+This is a preflight, not a sandbox. The plugin runs as its own process and can write wherever its own permissions allow; the check exists so the CLI does not *hand* it a path that leaves the store it named.
 
 ### Event Object
 
