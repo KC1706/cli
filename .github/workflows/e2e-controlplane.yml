@@ -18,7 +18,7 @@ permissions: {}
 jobs:
   controlplane:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 30
     permissions:
       contents: read
 

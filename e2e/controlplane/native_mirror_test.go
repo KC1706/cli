@@ -16,13 +16,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// nativeMirrorSeedTimeout bounds the wait for a seed, which is a full git sync.
-// Small repos have been observed ready in 40s-2m; the CLI is given less than
-// the harness so a slow seed surfaces as the command's own message rather than
-// as a killed process.
+// nativeMirrorSeedTimeout bounds the wait for a seed. Measured against
+// production, placing a mirror of a fresh repo took 9 seconds end to end — so
+// these are ceilings for a stall, not an expected duration, and they stay
+// generous because the cost of being wrong is asymmetric: a run killed by the
+// harness skips t.Cleanup and leaks resources on the shared account, while an
+// unused ceiling costs nothing.
+//
+// The CLI is given less than the harness so a stalled seed surfaces as the
+// command's own message ("still being created, check with mirror get") rather
+// than as a killed process with no explanation.
 const (
-	nativeMirrorSeedTimeout = 10 * time.Minute
-	nativeMirrorStepTimeout = 12 * time.Minute
+	nativeMirrorSeedTimeout = 5 * time.Minute
+	nativeMirrorStepTimeout = 6 * time.Minute
 )
 
 type clusterJSON struct {

@@ -432,25 +432,20 @@ func newRepoCloneCmd() *cobra.Command {
 				return err
 			}
 
-			// An explicit --cluster may name a cluster in a different federation
-			// than the active context, whose mirrors the active-context core can't
-			// see (the original bug: cloning a royalcanin.partial.to mirror while a
-			// different context is active failed with "not mirrored on ..."). Dial
-			// the core fronting that cluster — discovered from its well-known and
-			// authenticated with the matching local context, the same path
-			// `mirror add <repo> --cluster <slug>` uses — so the lookup resolves
-			// against the right federation. With no --cluster, list from the active
-			// context.
+			// With an explicit --cluster, dial the core fronting that cluster
+			// rather than the active context's — discovered from its well-known
+			// and authenticated with the matching local context, the same path
+			// `mirror add <repo> --cluster <slug>` uses. With no --cluster, list
+			// from the active context.
 			//
-			// A foreign federation's cluster is not in the active context's catalog,
-			// so its slug cannot resolve here. That is not a lost capability: a full
-			// entire:// URL names the host outright and this command forwards it to
-			// git with no lookup at all, which is the same clone. The error says so.
+			// A slug is a name in one login's catalog, so it resolves against the
+			// federation you are logged into and no other. That is the whole
+			// contract: name the cluster, and your login says whose.
 			runWithCore := runCore
 			clusterHost := ""
 			if cluster != "" {
 				if clusterHost, err = hostForClusterSlug(clusters, cluster); err != nil {
-					return fmt.Errorf("invalid --cluster: %w; to clone from a cluster outside this login's federation, pass its full %s<cluster>/%s/%s/%s URL instead", err, entireCloneURLScheme, mirrorCloneForge, owner, repo)
+					return fmt.Errorf("invalid --cluster: %w", err)
 				}
 				runWithCore = func(cmd *cobra.Command, fn func(context.Context, *coreapi.Client) error) error {
 					return runCoreForCluster(cmd, clusterHost, fn)
