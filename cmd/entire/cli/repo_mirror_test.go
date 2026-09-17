@@ -220,23 +220,26 @@ type recordedRequest struct {
 	query  url.Values
 }
 
-// onboardedEntry builds a /repos index entry for a mirrored/native repo with a
-// single ready placement on the given cluster slug.
+// onboardedEntry builds a /repos index entry for a GitHub mirror with a single
+// ready placement on the given cluster slug — provider and the placement flag
+// set the way the live index sets them for a mirror.
 func onboardedEntry(fullName, visibility, slug string) coreapi.RepoIndexEntry {
 	return coreapi.RepoIndexEntry{
 		FullName:   fullName,
 		Visibility: visibility,
+		Provider:   coreapi.NewOptString(repoProviderGitHub),
 		Placements: []coreapi.RepoPlacement{{ClusterSlug: slug, Status: coreapi.RepoPlacementStatusReady, Mirror: true}},
 	}
 }
 
-// nativeEntry is an onboarded repo with a non-mirror (native Entire) placement,
-// e.g. one created by `entire repo create`. `repo mirror list` must not
-// synthesize a GitHub clone URL for it and drops it from the directory.
+// nativeEntry is an Entire-native repo, e.g. one created by `entire repo
+// create`: provider "entire" and every placement mirror:false, as the live
+// index returns them.
 func nativeEntry(fullName, visibility, slug string) coreapi.RepoIndexEntry {
 	return coreapi.RepoIndexEntry{
 		FullName:   fullName,
 		Visibility: visibility,
+		Provider:   coreapi.NewOptString(repoProviderEntire),
 		Placements: []coreapi.RepoPlacement{{ClusterSlug: slug, Status: coreapi.RepoPlacementStatusReady, Mirror: false}},
 	}
 }
@@ -244,7 +247,7 @@ func nativeEntry(fullName, visibility, slug string) coreapi.RepoIndexEntry {
 // onboardedMulti builds a /repos entry placed on several clusters (all ready),
 // so multi-placement grouping and the CLUSTERS cell are observable.
 func onboardedMulti(fullName, visibility string, slugs ...string) coreapi.RepoIndexEntry {
-	e := coreapi.RepoIndexEntry{FullName: fullName, Visibility: visibility}
+	e := coreapi.RepoIndexEntry{FullName: fullName, Visibility: visibility, Provider: coreapi.NewOptString(repoProviderGitHub)}
 	for _, s := range slugs {
 		e.Placements = append(e.Placements, coreapi.RepoPlacement{ClusterSlug: s, Status: coreapi.RepoPlacementStatusReady, Mirror: true})
 	}
@@ -1403,7 +1406,7 @@ func TestRepoMirrorGet_Routing(t *testing.T) {
 func TestMirrorRefOwner(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, "acme", mirrorRefOwner("/gh/acme/web"))
-	require.Equal(t, "acme", mirrorRefOwner(qualifyRepoRef("acme/web")))
+	require.Equal(t, "acme", mirrorRefOwner(qualifyRepoRef(mirrorCloneForge, "acme/web")))
 	require.Empty(t, mirrorRefOwner(""))
 }
 
@@ -1541,7 +1544,7 @@ func TestBuildRepoDir(t *testing.T) {
 			onboardedEntry("acme/web", "private", "us"),
 			candidateEntry("acme/mkt", "public", coreapi.RepoCandidateAccessAdmin, true),
 			candidateEntry("alice/x", "private", coreapi.RepoCandidateAccessRead, false),
-		}, hosts)
+		}, hosts, mirrorCloneForge)
 		require.Equal(t, []repoDirRow{
 			{Repo: "/gh/acme/web", Private: true, Status: "ready", Placements: []repoDirPlacement{
 				{Cluster: "us", Status: "ready", CloneURL: "entire://aws-us-east-2.entire.io/gh/acme/web"},
@@ -1555,7 +1558,7 @@ func TestBuildRepoDir(t *testing.T) {
 		t.Parallel()
 		rows := buildRepoDir([]coreapi.RepoIndexEntry{
 			onboardedMulti("acme/web", "private", "us", "eu"),
-		}, map[string]string{"us": "aws-us-east-2.entire.io", "eu": "eu-west-1.entire.io"})
+		}, map[string]string{"us": "aws-us-east-2.entire.io", "eu": "eu-west-1.entire.io"}, mirrorCloneForge)
 		require.Len(t, rows, 1)
 		require.Equal(t, []repoDirPlacement{
 			{Cluster: "us", Status: "ready", CloneURL: "entire://aws-us-east-2.entire.io/gh/acme/web"},
@@ -1571,7 +1574,7 @@ func TestBuildRepoDir(t *testing.T) {
 				{ClusterSlug: "us", Status: coreapi.RepoPlacementStatusReady, Mirror: true},
 				{ClusterSlug: "eu", Status: coreapi.RepoPlacementStatusFailed, Mirror: true},
 			}},
-		}, hosts)
+		}, hosts, mirrorCloneForge)
 		require.Len(t, rows, 1)
 		require.Equal(t, repoDirStatusMixed, rows[0].Status)
 		require.Equal(t, "failed", rows[0].Placements[1].Status, "per-placement statuses stay exact")
@@ -1581,7 +1584,7 @@ func TestBuildRepoDir(t *testing.T) {
 		t.Parallel()
 		rows := buildRepoDir([]coreapi.RepoIndexEntry{
 			onboardedEntry("a/b", "public", "ghost"),
-		}, map[string]string{})
+		}, map[string]string{}, mirrorCloneForge)
 		require.Len(t, rows, 1)
 		require.Equal(t, []repoDirPlacement{
 			{Cluster: "ghost", Status: "ready"},
@@ -1595,7 +1598,7 @@ func TestBuildRepoDir(t *testing.T) {
 		rows := buildRepoDir([]coreapi.RepoIndexEntry{
 			nativeEntry("acme/native", "private", "us"),
 			onboardedEntry("acme/web", "public", "us"),
-		}, hosts)
+		}, hosts, mirrorCloneForge)
 		require.Equal(t, []repoDirRow{
 			{Repo: "/gh/acme/web", Private: false, Status: "ready", Placements: []repoDirPlacement{
 				{Cluster: "us", Status: "ready", CloneURL: "entire://aws-us-east-2.entire.io/gh/acme/web"},
@@ -1610,7 +1613,7 @@ func TestBuildRepoDir(t *testing.T) {
 				{ClusterSlug: "us", Status: coreapi.RepoPlacementStatusReady, Mirror: false},
 				{ClusterSlug: "us", Status: coreapi.RepoPlacementStatusReady, Mirror: true},
 			}},
-		}, hosts)
+		}, hosts, mirrorCloneForge)
 		require.Equal(t, []repoDirRow{
 			{Repo: "/gh/acme/web", Private: false, Status: "ready", Placements: []repoDirPlacement{
 				{Cluster: "us", Status: "ready", CloneURL: "entire://aws-us-east-2.entire.io/gh/acme/web"},
@@ -2250,16 +2253,24 @@ func TestRepoMirrorGet_NamesARepoOneWay(t *testing.T) {
 		require.Equal(t, []string{"octocat/hello-world"}, filters)
 	})
 
-	t.Run("a bare pair is refused and offered the forge", func(t *testing.T) {
+	t.Run("a bare pair is refused and offered both forges", func(t *testing.T) {
 		err := run("octocat/hello-world")
 		require.ErrorContains(t, err, "must name its forge")
 		require.ErrorContains(t, err, "/gh/octocat/hello-world")
+		require.ErrorContains(t, err, "/et/octocat/hello-world")
 		require.Empty(t, filters, "it must not reach the control plane")
 	})
 
-	t.Run("a native ref gets the subtree's own refusal", func(t *testing.T) {
+	// A native ref is served now, so it leaves the GitHub directory filter
+	// alone: a native repo is found through its project, and its placements come
+	// from the repo itself plus its native-mirror list. (The fake server answers
+	// every path, so the project lookup below fails on an empty response rather
+	// than on the grammar.)
+	t.Run("a native ref takes the native lookup, not the repos filter", func(t *testing.T) {
 		err := run("/et/my-project/my-repo")
-		require.ErrorContains(t, err, "does not support Entire repository")
-		require.Empty(t, filters)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "does not support")
+		require.NotContains(t, filters, "my-project/my-repo",
+			"the GitHub directory filter is not how a native repo is found")
 	})
 }

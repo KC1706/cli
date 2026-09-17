@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-const mirrorRepoRefHelp = "Repository references name their forge: /gh/<owner>/<repo> for GitHub, " +
-	"/et/<project>/<repo> for Entire. This operation currently supports GitHub mirrors only."
+const mirrorRepoRefHelp = "Repository references name their forge: /gh/<owner>/<repo> for a GitHub " +
+	"mirror, /et/<project>/<repo> for an Entire-native repository."
 
 // mirrorRepoRef is a repository named the one way this subtree names one:
 // /<forge>/<a>/<b>. The pair reads owner/repo on GitHub and project/repo on

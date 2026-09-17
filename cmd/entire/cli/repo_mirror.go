@@ -72,7 +72,7 @@ func mirrorVisibility(m coreapi.Mirror) string {
 
 func mirrorRow(m coreapi.Mirror) []string {
 	repo := m.Owner + "/" + m.Repo
-	cloneURL := mirrorCloneURL(m.ClusterHost, m.Owner, m.Repo)
+	cloneURL := forgeCloneURL(mirrorCloneForge, m.ClusterHost, m.Owner, m.Repo)
 	return []string{repo, cloneURL, mirrorVisibility(m)}
 }
 
@@ -116,10 +116,32 @@ var repoDirColumns = []column{colName, colClusters, colVisibility, colStatus, co
 // resolved (unknown slug, or a publicUrl that failed validation) — the slug
 // still names the placement, and no unsafe URL is emitted.
 type repoDirPlacement struct {
-	Cluster  string `json:"cluster"`
-	Status   string `json:"status"`
+	Cluster string `json:"cluster"`
+	Status  string `json:"status"`
+	// Role is the wire vocabulary of POST /repos/resolve: "primary" or
+	// "native_mirror". It is set only for Entire-native repos, where the two
+	// differ in what they can do — a mirror is read-only, and the primary is
+	// not removable through the mirror verbs. A GitHub repo's placements are
+	// all mirrors of an upstream that is not a placement at all, so they carry
+	// no role and the column stays out of that view.
+	Role string `json:"role,omitempty"`
+	// Stage is the native provisioning progress (pending → provisioned →
+	// registered → seeded → announced). It qualifies a processing placement
+	// only: readiness is Status and nothing else, so stage never decides
+	// anything — it says how far along a wait is.
+	Stage string `json:"stage,omitempty"`
+	// Removing marks a placement whose teardown is in flight. It stays listed
+	// rather than being hidden: creating on that cluster meanwhile is refused
+	// until the row is gone, so hiding it would hide the reason.
+	Removing bool   `json:"removing,omitempty"`
 	CloneURL string `json:"cloneUrl,omitempty"`
 }
+
+// Placement roles, in the control plane's own vocabulary (POST /repos/resolve).
+const (
+	placementRolePrimary      = "primary"
+	placementRoleNativeMirror = "native_mirror"
+)
 
 // repoDirRow is one directory row: one per onboarded repo (its GitHub-mirror
 // placements nested, so a repo mirrored across cells still lists once), or one
@@ -264,40 +286,47 @@ func clusterHostBySlug(clusters []coreapi.Cluster) map[string]string {
 // nested — each placement carrying its cluster slug, clone STATUS
 // (processing/ready/failed/suspended), and a clone URL synthesised from the
 // placement's cluster host. The row's own STATUS is the placements' shared
-// value, or "mixed" when they disagree. Non-mirror (native Entire) placements
-// are skipped: `repo mirror list` is the mirror directory, and a native repo
-// has no GitHub mirror clone URL to advertise (fabricating an
-// entire://.../gh/... URL for one would point nowhere). A repo with only
-// native placements therefore doesn't appear here. A placement whose cluster
-// host can't be resolved (unknown slug, or a publicUrl that failed validation)
-// still lists — its slug shows in CLUSTERS — but with an empty clone URL in
-// JSON; no unsafe URL is emitted.
-func buildRepoDir(entries []coreapi.RepoIndexEntry, hostBySlug map[string]string) []repoDirRow {
+// value, or "mixed" when they disagree. A placement whose cluster host can't be
+// resolved (unknown slug, or a publicUrl that failed validation) still lists —
+// its slug shows in CLUSTERS — but with an empty clone URL in JSON; no unsafe
+// URL is emitted.
+//
+// forge selects which repos are in the directory at all. It is the entry's
+// `provider` that decides, not the placements' `mirror` flag: cell_fanout.go
+// documents that real rows mark every placement Mirror:true, so keying on it
+// would be reading a field that does not answer this question. An entry whose
+// provider matches neither known value falls into no forge's view rather than
+// silently into both.
+func buildRepoDir(entries []coreapi.RepoIndexEntry, hostBySlug map[string]string, forge string) []repoDirRow {
 	var rows []repoDirRow
 	for _, e := range entries {
+		if !entryServesForge(e, forge) {
+			continue
+		}
 		name := e.FullName
 		if name == "" {
 			name = e.Name
 		}
+		entryForge := forgeOfEntry(e)
 		private := strings.EqualFold(e.Visibility, "private")
 		if cand, ok := e.Candidate.Get(); ok {
 			status := "owner-only"
 			if cand.Onboardable {
 				status = "available"
 			}
-			rows = append(rows, repoDirRow{Repo: qualifyRepoRef(name), Private: private, Status: status, Access: string(cand.Access)})
+			rows = append(rows, repoDirRow{Repo: qualifyRepoRef(entryForge, name), Private: private, Status: status, Access: string(cand.Access)})
 			continue
 		}
 		owner, repo, _ := strings.Cut(name, "/")
 		var placements []repoDirPlacement
 		status := ""
 		for _, p := range e.Placements {
-			if !p.Mirror {
-				continue // native Entire repo, not a GitHub mirror
+			if !placementServesForge(p, entryForge) {
+				continue
 			}
 			clone := ""
 			if host := hostBySlug[p.ClusterSlug]; host != "" && repo != "" {
-				clone = mirrorCloneURL(host, owner, repo)
+				clone = forgeCloneURL(entryForge, host, owner, repo)
 			}
 			placements = append(placements, repoDirPlacement{Cluster: p.ClusterSlug, Status: string(p.Status), CloneURL: clone})
 			switch status {
@@ -308,9 +337,9 @@ func buildRepoDir(entries []coreapi.RepoIndexEntry, hostBySlug map[string]string
 			}
 		}
 		if len(placements) == 0 {
-			continue // native-only repo: not part of the mirror directory
+			continue // an onboarded repo with nowhere to clone from is not a row
 		}
-		rows = append(rows, repoDirRow{Repo: qualifyRepoRef(name), Private: private, Status: status, Placements: placements})
+		rows = append(rows, repoDirRow{Repo: qualifyRepoRef(entryForge, name), Private: private, Status: status, Placements: placements})
 	}
 	return rows
 }
@@ -357,8 +386,59 @@ func sortRepoDir(rows []repoDirRow, spec string) error {
 // it belongs to, so a directory row prints the same shape every mirror verb
 // accepts. A value copied from the NAME column, or read out of --json, is then
 // a reference rather than something to prepend a forge to by hand.
-func qualifyRepoRef(ownerRepo string) string {
-	return "/" + mirrorCloneForge + "/" + ownerRepo
+func qualifyRepoRef(forge, ownerRepo string) string {
+	return "/" + forge + "/" + ownerRepo
+}
+
+// forgeOfEntry reads which forge backs a directory entry. `provider` is the
+// field that answers it ("github" | "entire"), but it is optional and open on
+// the client (normalize.go strips its enum), so an entry that omits it falls
+// back to its placements' `mirror` flag — which agrees with provider on every
+// row of the live index, GitHub repos marking every placement true and native
+// repos every placement false.
+//
+// The flag is the FALLBACK and not the primary signal on purpose:
+// cell_fanout.go documents that `mirror` must never decide which placement
+// routes a repo, and keying the common path on it would invite exactly that
+// confusion. An entry with neither signal yields "" — a row in no forge's view,
+// rather than one bucketed into whichever is tested first.
+func forgeOfEntry(e coreapi.RepoIndexEntry) string {
+	switch e.Provider.Or("") {
+	case repoProviderGitHub:
+		return mirrorCloneForge
+	case repoProviderEntire:
+		return nativeCloneForge
+	}
+	// A candidate is a GitHub repo that could be onboarded. It has no provider
+	// and no placements — there is nothing placed yet — so it is recognised by
+	// being a candidate at all.
+	if _, ok := e.Candidate.Get(); ok {
+		return mirrorCloneForge
+	}
+	if len(e.Placements) == 0 {
+		return ""
+	}
+	if slices.ContainsFunc(e.Placements, func(p coreapi.RepoPlacement) bool { return p.Mirror }) {
+		return mirrorCloneForge
+	}
+	return nativeCloneForge
+}
+
+// placementServesForge keeps a row's placements to the forge the row belongs
+// to. It matters only for an entry that carries both kinds, which the live
+// index does not produce — but the alternative is synthesising a /gh/ clone URL
+// for a native placement, a URL that would point nowhere.
+func placementServesForge(p coreapi.RepoPlacement, forge string) bool {
+	return p.Mirror == (forge == mirrorCloneForge)
+}
+
+// forgeFilterAll is the --forge value that merges both directories.
+const forgeFilterAll = "all"
+
+// entryServesForge reports whether an entry belongs in a directory filtered to
+// forge.
+func entryServesForge(e coreapi.RepoIndexEntry, forge string) bool {
+	return forge == forgeFilterAll || forgeOfEntry(e) == forge
 }
 
 // mirrorRefOwner returns the owner segment of a forge-qualified directory name.
@@ -437,7 +517,7 @@ func validateClusterHost(host string) error {
 func newRepoMirrorCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mirror",
-		Short: "Manage GitHub-mirror placements on EntireDB clusters",
+		Short: "Manage where a repository is mirrored across Entire clusters",
 	}
 	cmd.AddCommand(newRepoMirrorAddCmd())
 	cmd.AddCommand(newRepoMirrorListCmd())
@@ -453,7 +533,7 @@ func newRepoMirrorAddCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "add [repo]",
-		Short: "Register a GitHub mirror on a cluster",
+		Short: "Mirror a repository onto a cluster",
 		Long: "With no arguments, launches an interactive wizard: pick repos to " +
 			"mirror, pick one or more regions, then creates every (repo, region) " +
 			"mirror in parallel and prints the clone URLs. --cluster requires a <repo>.\n\n" +
@@ -463,10 +543,16 @@ func newRepoMirrorAddCmd() *cobra.Command {
 			"as soon as the placement is registered. Idempotent on " +
 			"(upstream, cluster). When --cluster is omitted, an " +
 			"interactive terminal offers the available clusters as a picker; " +
-			"non-interactive runs default to " + defaultClusterSlug + ".\n\n" + mirrorRepoRefHelp,
+			"non-interactive runs default to " + defaultClusterSlug + ".\n\n" +
+			"With an /et/ ref, places a read-only replica of an Entire-native repo " +
+			"on another cluster and waits for it to be seeded. A native mirror goes " +
+			"in a region other than the repo's own, so --cluster has no default " +
+			"there: a terminal offers the eligible clusters, other runs must name " +
+			"one. Pushes always go to the repo's primary cluster.\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo mirror add\n" +
 			"  entire repo mirror add /gh/octocat/hello-world\n" +
-			"  entire repo mirror add /gh/octocat/hello-world --cluster aws-us-east-2",
+			"  entire repo mirror add /gh/octocat/hello-world --cluster aws-us-east-2\n" +
+			"  entire repo mirror add /et/acme/web --cluster aws-eu-central-1",
 		Args: cobra.MaximumNArgs(1),
 		PreRunE: func(_ *cobra.Command, _ []string) error {
 			// Preserve zero as an unbounded wait for existing callers.
@@ -500,10 +586,13 @@ func newRepoMirrorAddCmd() *cobra.Command {
 // runCoreForCluster needs to find the core fronting that cluster, and the one
 // the clone URL is built from. The user never types it.
 func runMirrorAdd(cmd *cobra.Command, repoRef, clusterSlug string, opts mirrorAddOptions) error {
-	target, err := parseMirrorRepoRef(repoRef, mirrorCloneForge)
+	target, err := parseMirrorRepoRef(repoRef)
 	if err != nil {
 		cmd.SilenceUsage = true
 		return err
+	}
+	if target.forge == nativeCloneForge {
+		return runNativeMirrorAdd(cmd, target, clusterSlug, opts)
 	}
 	owner, repo := target.owner, target.repo
 	// --cluster omitted: on an interactive terminal, offer the catalog's
@@ -768,6 +857,7 @@ func warnRepoDirTruncated(cmd *cobra.Command) {
 // functions below, keeping the cobra constructor to flag wiring.
 type repoMirrorListOpts struct {
 	filters   repoDirLocalFilters
+	forge     string
 	limit     int
 	pageSize  int
 	pageToken string
@@ -845,7 +935,7 @@ func runRepoMirrorListPage(cmd *cobra.Command, o repoMirrorListOpts, headers []s
 		if out.Truncated && next == "" {
 			warnRepoDirTruncated(cmd)
 		}
-		rows, err := applyLocal(buildRepoDir(out.Repos, hostBySlug))
+		rows, err := applyLocal(buildRepoDir(out.Repos, hostBySlug, o.forge))
 		if err != nil {
 			return err
 		}
@@ -905,7 +995,7 @@ func runRepoMirrorListWalk(cmd *cobra.Command, o repoMirrorListOpts, headers []s
 		if truncated {
 			warnRepoDirTruncated(cmd)
 		}
-		rows, err := applyLocal(buildRepoDir(repos, hostBySlug))
+		rows, err := applyLocal(buildRepoDir(repos, hostBySlug, o.forge))
 		if err != nil {
 			return nil, err
 		}
@@ -919,7 +1009,7 @@ func runRepoMirrorListWalk(cmd *cobra.Command, o repoMirrorListOpts, headers []s
 }
 
 func newRepoMirrorListCmd() *cobra.Command {
-	var cluster, owner, name, status, access string
+	var cluster, owner, name, status, access, forge string
 	var private bool
 	var mirrored, available bool
 	var sortSpec string
@@ -934,6 +1024,10 @@ func newRepoMirrorListCmd() *cobra.Command {
 			"status) and GitHub repos you could onboard (access, availability). " +
 			"Sparse cells show '-'. Per-cluster detail and clone URLs: " +
 			"`entire repo mirror get /gh/<owner>/<repo>`.\n\n" +
+			"GitHub is the default view. Pass --forge " + nativeCloneForge + " for " +
+			"Entire-native repos and where each is placed, or --forge " + forgeFilterAll +
+			" for both in one table; the NAME column always prints the " +
+			"forge-qualified reference the other verbs take.\n\n" +
 			"The first " + strconv.Itoa(coreListFetchBudget) + " entries are fetched by default, with a note on stderr " +
 			"when more exist. Filters and --sort apply to those fetched rows — add " +
 			"--all to work over the complete list, or --limit N for just the first N.\n\n" +
@@ -954,6 +1048,9 @@ func newRepoMirrorListCmd() *cobra.Command {
 					return fmt.Errorf("invalid --cluster: %w", err)
 				}
 			}
+			if !slices.Contains([]string{mirrorCloneForge, nativeCloneForge, forgeFilterAll}, forge) {
+				return fmt.Errorf("invalid --forge %q: must be %s, %s, or %s", forge, mirrorCloneForge, nativeCloneForge, forgeFilterAll)
+			}
 			_, _, err := parseSortColumn(sortSpec, repoDirColumns)
 			return err
 		},
@@ -966,6 +1063,7 @@ func newRepoMirrorListCmd() *cobra.Command {
 					mirroredOnly: mirrored, availableOnly: available,
 					sortSpec: sortSpec,
 				},
+				forge: forge,
 				limit: limit, pageSize: pageSize, pageToken: pageToken,
 				noPager: noPager, all: all,
 			})
@@ -984,6 +1082,7 @@ func newRepoMirrorListCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&private, "private", false, "Filter by visibility: --private for private only, --private=false for public only (omit for all)")
 	cmd.Flags().BoolVar(&mirrored, "mirrored", false, "Keep only repos already mirrored (drops onboardable candidates)")
 	cmd.Flags().BoolVar(&available, "available", false, "Keep only GitHub repos you could onboard as mirrors (drops existing mirrors)")
+	cmd.Flags().StringVar(&forge, "forge", mirrorCloneForge, "Which repositories to list: "+mirrorCloneForge+" for GitHub mirrors and onboardable GitHub repos, "+nativeCloneForge+" for Entire-native repos, or "+forgeFilterAll+" for both")
 	cmd.Flags().StringVar(&sortSpec, "sort", "", "Sort by column key (e.g. name, clusters; prefix '-' for descending). Default: name ascending")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Show at most N rows, applied after the local filters and sort (0 shows all fetched)")
 	cmd.Flags().BoolVar(&all, "all", false, "Fetch the complete directory instead of the first "+strconv.Itoa(coreListFetchBudget)+" entries (slower on large orgs)")
@@ -992,7 +1091,7 @@ func newRepoMirrorListCmd() *cobra.Command {
 	pageModeFlags(cmd, &pageSize, &pageToken)
 	addJSONFlag(cmd)
 	setFlagGroup(cmd, flagGroupNavigation, "all", "limit", "page-size", "page-token")
-	setFlagGroup(cmd, flagGroupFiltering, "name", "owner", "cluster", "status", "access", "private", "mirrored", "available", "sort")
+	setFlagGroup(cmd, flagGroupFiltering, "forge", "name", "owner", "cluster", "status", "access", "private", "mirrored", "available", "sort")
 	setFlagGroup(cmd, flagGroupFormatting, "json", "no-pager")
 	useGroupedFlagHelp(cmd,
 		flagGroup{name: flagGroupNavigation},
@@ -1005,20 +1104,24 @@ func newRepoMirrorListCmd() *cobra.Command {
 func newRepoMirrorGetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <mirror>",
-		Short: "Show a repo's mirrors by owner/repo, or one mirror by ULID or clone URL",
-		Long: "Show a mirror, or every mirror of a repo. <mirror> is one of:\n\n" +
+		Short: "Show where a repo is mirrored, or one mirror by ULID or clone URL",
+		Long: "Show a mirror, or every placement of a repo. <mirror> is one of:\n\n" +
 			"  - /gh/<owner>/<repo>, as shown in the `mirror list` NAME column — shows\n" +
 			"    the repo (visibility, access) and its mirror on every cluster, with\n" +
 			"    per-cluster clone URL and status\n" +
+			"  - /et/<project>/<repo> — shows an Entire-native repo's primary cluster\n" +
+			"    and each read-only mirror of it, with per-cluster clone URL, status\n" +
+			"    and, while one is being seeded, how far it has got\n" +
 			"  - a mirror ULID\n" +
 			"  - an entire:// clone URL (entire://<cluster>/gh/<owner>/<repo>) — the form\n" +
 			"    `git clone` accepts; a trailing .git, as pasted from `git remote -v`, is\n" +
 			"    accepted too\n\n" +
 			"A clone URL is looked up on the login server fronting its cluster, so it\n" +
 			"resolves even when that cluster belongs to a federation other than the active\n" +
-			"auth context; an owner/repo or ULID is looked up on the active context's\n" +
-			"login server.",
+			"auth context; a repository reference or ULID is looked up on the active\n" +
+			"context's login server.",
 		Example: "  entire repo mirror get /gh/octocat/hello-world\n" +
+			"  entire repo mirror get /et/acme/web\n" +
 			"  entire repo mirror get 01KS6KFJR2XS6PZ188MVYE07AN\n" +
 			"  entire repo mirror get entire://aws-us-east-2.entire.io/gh/octocat/hello-world",
 		Args: cobra.ExactArgs(1),
@@ -1061,10 +1164,13 @@ func newRepoMirrorGetCmd() *cobra.Command {
 			}
 			// Everything else is a repository reference, in the one grammar
 			// the whole mirror subtree takes.
-			target, err := parseMirrorRepoRef(ref, mirrorCloneForge)
+			target, err := parseMirrorRepoRef(ref)
 			if err != nil {
 				cmd.SilenceUsage = true
 				return err
+			}
+			if target.forge == nativeCloneForge {
+				return runNativeMirrorGet(cmd, target)
 			}
 			return runRepoMirrorGetByName(cmd, target.owner+"/"+target.repo)
 		},
@@ -1115,13 +1221,13 @@ func runRepoMirrorGetByName(cmd *cobra.Command, ref string) error {
 // name, so it falls back to a bare identity row instead of vanishing.
 // Placements are ordered by cluster slug for a deterministic table.
 func mirrorRepoDetailRow(e coreapi.RepoIndexEntry, hostBySlug map[string]string) repoDirRow {
-	rows := buildRepoDir([]coreapi.RepoIndexEntry{e}, hostBySlug)
+	rows := buildRepoDir([]coreapi.RepoIndexEntry{e}, hostBySlug, mirrorCloneForge)
 	if len(rows) == 0 {
 		name := e.FullName
 		if name == "" {
 			name = e.Name
 		}
-		return repoDirRow{Repo: qualifyRepoRef(name), Private: strings.EqualFold(e.Visibility, "private")}
+		return repoDirRow{Repo: qualifyRepoRef(mirrorCloneForge, name), Private: strings.EqualFold(e.Visibility, "private")}
 	}
 	row := rows[0]
 	slices.SortFunc(row.Placements, func(a, b repoDirPlacement) int {
@@ -1138,6 +1244,12 @@ func mirrorRepoDetailRow(e coreapi.RepoIndexEntry, hostBySlug map[string]string)
 // matching the list's VISIBILITY column. A candidate (no placements,
 // availability in Status) states its availability instead of an empty table;
 // a native-only repo states it has no GitHub mirrors.
+//
+// A ROLE column appears only when some placement carries one, which is the
+// native view: there a repo's primary and its read-only mirrors sit in the same
+// table and the difference decides what you can do with each. GitHub rows carry
+// no role — every placement there mirrors an upstream that is not itself a
+// placement — so that view keeps three columns.
 func renderRepoDetail(w io.Writer, row repoDirRow) {
 	st := newStatusStyles(w)
 	section := func(label, value string) {
@@ -1160,15 +1272,36 @@ func renderRepoDetail(w io.Writer, row repoDirRow) {
 		return
 	}
 
-	headers := styledHeaders(st, []string{colHeaderCluster, colHeaderCloneURL, colHeaderStatus})
+	withRole := slices.ContainsFunc(row.Placements, func(p repoDirPlacement) bool { return p.Role != "" })
+	cols := []string{colHeaderCluster, colHeaderCloneURL, colHeaderStatus}
+	if withRole {
+		cols = []string{colHeaderCluster, "ROLE", colHeaderCloneURL, colHeaderStatus}
+	}
+	headers := styledHeaders(st, cols)
 	rows := make([][]string, len(row.Placements))
 	for i, p := range row.Placements {
-		cluster, status := p.Cluster, p.Status
+		cluster, status, role := p.Cluster, p.Status, p.Role
+		// Stage and the teardown marker qualify the status cell rather than
+		// taking columns of their own: each is set only in one transient state,
+		// and an always-empty column costs every reader something one reader
+		// wants. The Status FIELD stays the server's own value, so --json is
+		// machine-readable and only the rendering is prose.
+		if p.Stage != "" {
+			status += " (" + p.Stage + ")"
+		}
+		if p.Removing {
+			status += " (removing)"
+		}
 		if st.colorEnabled {
 			cluster = st.render(st.cyan, cluster)
-			if style, ok := repoStatusColor(st, status); ok {
+			if style, ok := repoStatusColor(st, p.Status); ok {
 				status = st.render(style, status)
 			}
+			role = st.render(st.cyan, role)
+		}
+		if withRole {
+			rows[i] = []string{cluster, orDash(role), orDash(p.CloneURL), status}
+			continue
 		}
 		rows[i] = []string{cluster, orDash(p.CloneURL), status}
 	}
@@ -1268,18 +1401,39 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 	var cluster string
 	cmd := &cobra.Command{
 		Use:   "remove <repo>",
-		Short: "Un-register a GitHub mirror from a cluster",
-		Long: "Removes a mirror placement for a GitHub repo from the cluster " +
-			"named by --cluster (default " + defaultClusterSlug + "). Other " +
-			"clusters' placements of the same upstream are unaffected.\n\n" + mirrorRepoRefHelp,
+		Short: "Remove a repository's mirror from a cluster",
+		Long: "Removes a mirror placement from the cluster named by --cluster. " +
+			"Other clusters' placements of the same repository are unaffected.\n\n" +
+			"For a /gh/ ref, --cluster defaults to " + defaultClusterSlug + ".\n\n" +
+			"For an /et/ ref, --cluster is required — a native repo's placements " +
+			"depend on the repo, so there is no default to fall back on — and the " +
+			"repo's own primary cluster is refused: removing that is `entire repo " +
+			"delete`. Teardown is asynchronous, so the command waits for the " +
+			"placement to disappear.\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo mirror remove /gh/octocat/hello-world\n" +
-			"  entire repo mirror remove /gh/octocat/hello-world --cluster aws-eu-central-1",
+			"  entire repo mirror remove /gh/octocat/hello-world --cluster aws-eu-central-1\n" +
+			"  entire repo mirror remove /et/acme/web --cluster aws-eu-central-1",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target, err := parseMirrorRepoRef(args[0], mirrorCloneForge)
+			target, err := parseMirrorRepoRef(args[0])
 			if err != nil {
 				cmd.SilenceUsage = true
 				return err
+			}
+			if target.forge == nativeCloneForge {
+				// --cluster's default is a GitHub-path convenience: one fixed
+				// cluster every upstream can be mirrored onto. A native repo's
+				// placements depend on the repo, so defaulting would pick a
+				// cluster the caller never named — say which one to remove.
+				if !cmd.Flags().Changed("cluster") {
+					cmd.SilenceUsage = true
+					return fmt.Errorf("pass --cluster to say which mirror of %s to remove (run `entire repo mirror get %s` to see its placements)", nativeRefOf(target), nativeRefOf(target))
+				}
+				if err := validateClusterSlug(cluster); err != nil {
+					cmd.SilenceUsage = true
+					return fmt.Errorf("invalid --cluster: %w", err)
+				}
+				return runNativeMirrorRemove(cmd, target, cluster)
 			}
 			owner, repo := target.owner, target.repo
 			clusterHost, err := clusterHostForSlug(cmd, cluster)

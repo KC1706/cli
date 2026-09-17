@@ -125,6 +125,16 @@ type mirrorRemotePlan struct {
 	// the previous URL did not make it into git config — the difference matters:
 	// this is the one path where a successful-looking run drops the old URL.
 	preserveSkipped string
+	// pushURL, when non-empty, is written as remote.<name>.pushurl so pushes
+	// leave the mirror and go to the repo's primary cluster. An Entire-native
+	// mirror is read-only: without this, repointing a remote at one would trade
+	// a working `git push` for a server refusal, which is not a trade the user
+	// asked for by choosing where to fetch from.
+	//
+	// It is only ever SET, never cleared. A native repo's primary does not move,
+	// so a pushurl left behind by an earlier `remote use` already names the same
+	// cluster this one would.
+	pushURL string
 	// noop is true when remote already points at mirrorURL.
 	noop bool
 }
@@ -140,8 +150,8 @@ type mirrorRemotePlan struct {
 // in preserveSkipped rather than dropped quietly, because a fork checkout
 // (`origin` + `upstream` both already configured) hits that path by default and
 // would otherwise see a clean ✓ while the replaced URL left git config for good.
-func planMirrorRemote(remote, mirrorURL, currentURL, upstream string, remotes map[string]bool) mirrorRemotePlan {
-	plan := mirrorRemotePlan{remote: remote, mirrorURL: mirrorURL}
+func planMirrorRemote(remote, mirrorURL, pushURL, currentURL, upstream string, remotes map[string]bool) mirrorRemotePlan {
+	plan := mirrorRemotePlan{remote: remote, mirrorURL: mirrorURL, pushURL: pushURL}
 	if !remotes[remote] {
 		plan.add = true
 		return plan
@@ -185,6 +195,11 @@ func applyMirrorRemotePlan(ctx context.Context, dir string, plan mirrorRemotePla
 	if _, err := gitRunner(ctx, dir, "remote", verb, plan.remote, plan.mirrorURL); err != nil {
 		return fmt.Errorf("point remote %q at the mirror: %w", plan.remote, err)
 	}
+	if plan.pushURL != "" {
+		if _, err := gitRunner(ctx, dir, "remote", "set-url", "--push", plan.remote, plan.pushURL); err != nil {
+			return fmt.Errorf("point pushes of remote %q at the primary: %w", plan.remote, err)
+		}
+	}
 	return nil
 }
 
@@ -212,6 +227,11 @@ func reportMirrorRemotePlan(out, errW io.Writer, plan mirrorRemotePlan) {
 		}
 	}
 	fmt.Fprintf(out, "\nFetch through it:\n  git fetch %s\n", plan.remote)
+	if plan.pushURL != "" {
+		// Said plainly rather than left to be discovered by a rejected push: the
+		// user asked to fetch from a mirror and got a split remote out of it.
+		fmt.Fprintf(out, "\nThe mirror is read-only, so pushes still go to the primary:\n  %s\n", plan.pushURL)
+	}
 
 	if plan.preserveSkipped != "" {
 		// The URL is redacted here for the same reason it is on the "was:" line:
@@ -345,14 +365,14 @@ func runMirrorUseForm(cmd *cobra.Command, action string, form *huh.Form) error {
 	return nil
 }
 
-// mirrorUseForge is the only forge mirrors support today; a remote pointing
-// anywhere else cannot name a mirrorable upstream.
-const mirrorUseForge = "gh"
-
-// resolveMirrorUseUpstream determines the GitHub upstream `remote use` should
-// look for mirrors of. An explicit [repo] wins. Otherwise the coordinates
-// are read from a configured remote — which already names the repo the user is
+// resolveMirrorUseUpstream determines the repository `remote use` should look
+// for placements of. An explicit [repo] wins. Otherwise the coordinates are
+// read from a configured remote — which already names the repo the user is
 // standing in.
+//
+// Both forges resolve: a GitHub remote names a mirrorable upstream, and an
+// entire:// remote names the repo it was cloned from, native or not. Which one
+// came back decides how placements are looked up.
 //
 // Note the two distinct roles a remote name plays here: `remote` is the *write
 // target* (what gets pointed at the mirror), while repo identity can come from
@@ -363,13 +383,9 @@ const mirrorUseForge = "gh"
 //
 // entire:// remotes resolve as readily as forge remotes (their forge lives in
 // the URL path), so switching clusters never needs the repo retyped.
-func resolveMirrorUseUpstream(ctx context.Context, dir, remote, arg string) (owner, repo string, err error) {
+func resolveMirrorUseUpstream(ctx context.Context, dir, remote, arg string) (mirrorRepoRef, error) {
 	if arg != "" {
-		target, perr := parseMirrorRepoRef(arg, mirrorUseForge)
-		if perr != nil {
-			return "", "", perr
-		}
-		return target.owner, target.repo, nil
+		return parseMirrorRepoRef(arg)
 	}
 
 	candidates := []string{remote}
@@ -390,13 +406,19 @@ func resolveMirrorUseUpstream(ctx context.Context, dir, remote, arg string) (own
 			tried = append(tried, name+" (unparseable URL)")
 			continue
 		}
-		if info.Forge != mirrorUseForge {
-			tried = append(tried, name+" (not a GitHub repo — mirrors are GitHub-only)")
-			continue
+		switch info.Forge {
+		case mirrorCloneForge:
+			// GitHub owners and repos are stored lowercase server-side.
+			return mirrorRepoRef{forge: mirrorCloneForge, owner: strings.ToLower(info.Owner), repo: strings.ToLower(info.Repo)}, nil
+		case nativeCloneForge:
+			// Native names keep the spelling the remote carries; both lookups
+			// behind them fold case server-side.
+			return mirrorRepoRef{forge: nativeCloneForge, owner: info.Owner, repo: info.Repo}, nil
+		default:
+			tried = append(tried, name+" (not an Entire or GitHub repo)")
 		}
-		return strings.ToLower(info.Owner), strings.ToLower(info.Repo), nil
 	}
-	return "", "", fmt.Errorf("cannot tell which repo to mirror from the git remotes (tried %s); pass a repository reference explicitly (for example, /gh/owner/repo)", strings.Join(tried, ", "))
+	return mirrorRepoRef{}, fmt.Errorf("cannot tell which repo to act on from the git remotes (tried %s); pass a repository reference explicitly (for example, /gh/owner/repo or /et/project/repo)", strings.Join(tried, ", "))
 }
 
 // newRepoRemoteCmd is the `entire repo remote` subtree: verbs that edit the
@@ -466,21 +488,43 @@ func newRepoRemoteUseCmd() *cobra.Command {
 				return NewSilentError(errors.New("not a git repository"))
 			}
 
-			owner, repo, err := resolveMirrorUseUpstream(ctx, repoRoot, remote, upstreamArg)
+			repoRef, err := resolveMirrorUseUpstream(ctx, repoRoot, remote, upstreamArg)
 			if err != nil {
 				return err
 			}
+			name := repoRef.owner + "/" + repoRef.repo
+			qualified := "/" + repoRef.forge + "/" + name
 
-			// The pull-gated placement lookup is the same authority the clone's
-			// STS exchange enforces, so anything the user could clone resolves
-			// here — public mirrors included. The catalog alongside it is what
-			// names each placement's cluster by the slug --cluster takes.
+			// For GitHub, the pull-gated placement lookup is the same authority
+			// the clone's STS exchange enforces, so anything the user could clone
+			// resolves here — public mirrors included. For a native repo the
+			// placements are the repo's own primary plus its ready mirrors. The
+			// catalog alongside either is what names each placement's cluster by
+			// the slug --cluster takes.
 			var (
 				placements []coreapi.ResolvedPlacement
 				clusters   []coreapi.Cluster
+				// primaryURL is set only for a native repo: pushes must go there
+				// even when fetches come from a read-only mirror.
+				primaryURL string
+				nativeRepo *coreapi.Repo
 			)
 			if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
-				ps, lerr := resolvePullablePlacements(ctx, c, owner, repo)
+				if repoRef.forge == nativeCloneForge {
+					repo, cat, lerr := loadNativeRepo(ctx, c, repoRef)
+					if lerr != nil {
+						return lerr
+					}
+					mirrors, lerr := listNativeMirrors(ctx, c, repo.ID)
+					if lerr != nil {
+						return lerr
+					}
+					nativeRepo, clusters = repo, cat
+					placements = nativeUsePlacements(repo, mirrors, cat)
+					primaryURL = nativeRepoURLAt(repo, clusterHostBySlug(cat)[repo.ClusterSlug.Or("")])
+					return nil
+				}
+				ps, lerr := resolvePullablePlacements(ctx, c, repoRef.owner, repoRef.repo)
 				if lerr != nil {
 					return lerr
 				}
@@ -495,7 +539,7 @@ func newRepoRemoteUseCmd() *cobra.Command {
 				return err
 			}
 			if len(placements) == 0 {
-				return fmt.Errorf("%s/%s is not mirrored (or you have no access to its mirrors); create one first:\n  entire repo mirror add /gh/%s/%s", owner, repo, owner, repo)
+				return fmt.Errorf("%s has no cluster you can fetch from; create a mirror first:\n  entire repo mirror add %s", qualified, qualified)
 			}
 
 			// --cluster names a slug; the picker matches on the host a placement
@@ -519,13 +563,25 @@ func newRepoRemoteUseCmd() *cobra.Command {
 
 			chosen, err := selectPlacement(cmd, placements, clusterHost, clusterSlugByHost(clusters), placementPicker{
 				selector: "--cluster",
-				title:    fmt.Sprintf("%s/%s is mirrored on more than one cluster — pick the one to use", owner, repo),
+				title:    qualified + " is on more than one cluster — pick the one to use",
 				action:   "Remote update",
 			})
 			if err != nil {
 				return err
 			}
-			mirrorURL := mirrorCloneURL(chosen.ClusterHost, owner, repo)
+			mirrorURL := forgeCloneURL(mirrorCloneForge, chosen.ClusterHost, repoRef.owner, repoRef.repo)
+			// A native URL is the server's own path, not a reconstruction from
+			// the ref, so `repo view`'s remote and this one cannot disagree.
+			// pushURL is set only when the chosen placement is NOT the primary:
+			// pointing a remote's pushes at the cluster it already fetches from
+			// would be noise in git config.
+			pushURL := ""
+			if repoRef.forge == nativeCloneForge {
+				mirrorURL = nativeRepoURLAt(nativeRepo, chosen.ClusterHost)
+				if primaryURL != "" && !strings.EqualFold(primaryURL, mirrorURL) {
+					pushURL = primaryURL
+				}
+			}
 
 			remotes, err := listGitRemotes(ctx, repoRoot)
 			if err != nil {
@@ -559,7 +615,7 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			if target != remote {
 				targetURL = ""
 			}
-			plan := planMirrorRemote(target, mirrorURL, targetURL, preserve, remotes)
+			plan := planMirrorRemote(target, mirrorURL, pushURL, targetURL, preserve, remotes)
 			if err := applyMirrorRemotePlan(ctx, repoRoot, plan); err != nil {
 				return err
 			}

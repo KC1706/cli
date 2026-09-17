@@ -109,9 +109,10 @@ func TestParseMirrorRepoRef_UnservedForgeIsRefusedUnparsed(t *testing.T) {
 	require.ErrorContains(t, err, "supports Entire repositories only")
 }
 
-// TestMirrorCommands_NativeRepoUnsupported covers the verbs that serve GitHub
-// alone, where a native ref is a reasonable thing to ask about and the answer
-// is a pointer to the command that does serve it.
+// TestMirrorCommands_NativeRepoUnsupported covers `repo access list`, the one
+// verb here that still serves GitHub alone: it reads GitHub collaborators, and
+// a native repo's access is grants, so the answer is a pointer to the command
+// that does serve it.
 func TestMirrorCommands_NativeRepoUnsupported(t *testing.T) {
 	t.Parallel()
 	t.Run("access list", func(t *testing.T) {
@@ -124,12 +125,20 @@ func TestMirrorCommands_NativeRepoUnsupported(t *testing.T) {
 		require.ErrorContains(t, err, "does not support Entire repository")
 		require.ErrorContains(t, err, "entire repo grant list")
 	})
-	t.Run("remote use", func(t *testing.T) {
-		t.Parallel()
-		_, _, err := resolveMirrorUseUpstream(t.Context(), t.TempDir(), "origin", "/et/project/widget")
-		require.ErrorContains(t, err, "does not support Entire repository")
-		require.NotContains(t, err.Error(), "invalid")
-	})
+}
+
+// TestResolveMirrorUseUpstream_BothForges pins that `repo remote use` now reads
+// a native ref as readily as a GitHub one — a clone of either kind can have its
+// remote repointed at another cluster.
+func TestResolveMirrorUseUpstream_BothForges(t *testing.T) {
+	t.Parallel()
+	native, err := resolveMirrorUseUpstream(t.Context(), t.TempDir(), "origin", "/et/project/widget")
+	require.NoError(t, err)
+	require.Equal(t, mirrorRepoRef{forge: nativeCloneForge, owner: "project", repo: "widget"}, native)
+
+	mirror, err := resolveMirrorUseUpstream(t.Context(), t.TempDir(), "origin", "/gh/Acme/Widget")
+	require.NoError(t, err)
+	require.Equal(t, mirrorRepoRef{forge: mirrorCloneForge, owner: "acme", repo: "widget"}, mirror)
 }
 
 // TestBareRefSuggestions_OnlyOffersRefsTheCallerAccepts pins the helper's
