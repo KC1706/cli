@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 func TestMaybeRunPlugin_MissingGraphNonInteractive(t *testing.T) { //nolint:paralleltest // isolates PATH and terminal detection
@@ -535,5 +537,82 @@ func TestOffersOnDemandInstall_IsNarrow(t *testing.T) {
 		if offersOnDemandInstall(name) {
 			t.Errorf("offersOnDemandInstall(%q) = true, want false", name)
 		}
+	}
+}
+
+// TestInstallMissingPlugin_RefreshesStaleIndexOnMiss reproduces the window
+// right after a plugin is added to the index: the local clone still holds the
+// catalog from before the entry landed.
+//
+// The clone refreshes on a 24-hour TTL, so without the forced retry the user
+// is told the plugin "is not listed in the plugin index" for up to a day after
+// it demonstrably is — the error blames the index when the local copy is
+// merely old.
+func TestInstallMissingPlugin_RefreshesStaleIndexOnMiss(t *testing.T) { //nolint:paralleltest // mutates env via cache and PATH isolation
+	dir := t.TempDir()
+	withIsolatedPath(t)
+	withPathDir(t, dir)
+	t.Setenv("ENTIRE_PLUGIN_DIR", filepath.Join(dir, "managed"))
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	t.Setenv("ACCESSIBLE", "1")
+	t.Setenv("ENTIRE_TELEMETRY_OPTOUT", "1")
+	withIndexCache(t)
+
+	// The catalog as it was before investigate was published.
+	indexURL, indexDir := newIndexRepo(t, `{"version":1,"plugins":[{"name":"graph","repo_url":"https://github.com/entireio/entire-graph"}]}`)
+	t.Setenv(pluginIndexEnvVar, indexURL)
+
+	// Prime the cache with that stale copy, exactly as an earlier command would.
+	if _, err := SyncPluginIndex(t.Context(), indexURL, false); err != nil {
+		t.Fatalf("prime index cache: %v", err)
+	}
+
+	// The entry lands upstream. The cached clone is now stale and, without a
+	// forced refresh, stays stale until the TTL expires.
+	testutil.WriteFile(t, indexDir, pluginIndexFileName,
+		`{"version":1,"plugins":[{"name":"graph","repo_url":"https://github.com/entireio/entire-graph"},`+
+			`{"name":"investigate","repo_url":"https://github.com/entireio/entire-investigate"}]}`)
+	testutil.GitAdd(t, indexDir, pluginIndexFileName)
+	testutil.GitCommit(t, indexDir, "add investigate")
+
+	// A real binary to place, so the install completes and the caller's own
+	// "was it actually installed?" check passes.
+	sourceDir := t.TempDir()
+	source := writePluginBinary(t, sourceDir, "entire-investigate", filepath.Join(dir, "args.txt"), 0)
+
+	var installed bool
+	restore := onDemandPluginInstall
+	onDemandPluginInstall = func(_ context.Context, _ *cobra.Command, src installSource, _ remoteInstallFlags) error {
+		installed = true
+		// The entry only exists in the refreshed catalog, so resolving to it
+		// is the proof that the retry re-read the index rather than the
+		// stale clone.
+		if src.Resolved == nil || src.Resolved.RepoURL != "https://github.com/entireio/entire-investigate" {
+			t.Errorf("resolved source = %+v, want the freshly indexed repo", src.Resolved)
+		}
+		_, err := InstallPluginFromPath(InstallPluginOptions{SourcePath: source})
+		return err
+	}
+	t.Cleanup(func() { onDemandPluginInstall = restore })
+
+	root := newTestRoot()
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	root.SetOut(&bytes.Buffer{})
+
+	// The confirmation reads the controlling terminal rather than stdin, so
+	// the answer has to arrive through that seam.
+	originalInput := openPluginPromptTerminal
+	openPluginPromptTerminal = func() (pluginPromptTerminal, error) {
+		return pluginPromptTerminal{in: io.NopCloser(strings.NewReader("\n"))}, nil
+	}
+	t.Cleanup(func() { openPluginPromptTerminal = originalInput })
+
+	_, err := installMissingPlugin(t.Context(), root, "investigate")
+	if err != nil {
+		t.Fatalf("installMissingPlugin: %v\nstderr: %s", err, stderr.String())
+	}
+	if !installed {
+		t.Fatalf("install was never reached; stderr: %s", stderr.String())
 	}
 }
