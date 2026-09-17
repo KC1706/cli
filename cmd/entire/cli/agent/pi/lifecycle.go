@@ -266,26 +266,6 @@ func resolveSessionDir(ctx context.Context) (worktreeRoot string, ok bool) {
 // sessionCacheDir is .entire/tmp/pi relative to the .entire root.
 var sessionCacheDir = entiredir.MustName(paths.EntireTmpDir) + "/" + piHookCacheSubdir
 
-// openSessionCache returns the shared .entire root for the repo this hook is
-// running in, with the pi/ cache directory created under it. A repo that cannot
-// be resolved yields ok=false and every caller degrades: the cache is an
-// optimization, never the only copy of anything.
-func openSessionCache(ctx context.Context) (root *os.Root, ok bool) {
-	worktreeRoot, ok := resolveSessionDir(ctx)
-	if !ok {
-		return nil, false
-	}
-	root, err := entiredir.OpenAt(worktreeRoot)
-	if err != nil {
-		return nil, false
-	}
-	if err := osroot.MkdirAllNoSymlink(root, sessionCacheDir, 0o750); err != nil {
-		logging.Debug(ctx, "pi: session cache mkdir", slog.String("err", err.Error()))
-		return nil, false
-	}
-	return root, true
-}
-
 func extractModelFromPiSessionFile(path string) string {
 	if path == "" {
 		return ""
@@ -323,8 +303,12 @@ func captureTranscript(ctx context.Context, sessionID, piSessionFile string) str
 	if !ok {
 		return ""
 	}
-	root, ok := openSessionCache(ctx)
-	if !ok {
+	root, err := entiredir.OpenAt(worktreeRoot)
+	if err != nil {
+		return ""
+	}
+	if err := osroot.MkdirAllNoSymlink(root, sessionCacheDir, 0o750); err != nil {
+		logging.Debug(ctx, "pi: session cache mkdir", slog.String("err", err.Error()))
 		return ""
 	}
 	name := sessionCacheDir + "/" + sessionID + ".json"
