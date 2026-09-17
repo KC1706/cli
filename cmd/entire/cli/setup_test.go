@@ -4035,11 +4035,7 @@ func TestManageAgents_ExternalAgentSettingDoesNotLeakAcrossScopes(t *testing.T) 
 				t.Fatalf("runManageAgents() error = %v", err)
 			}
 
-			projectData, err := os.ReadFile(EntireSettingsFile)
-			if err != nil {
-				t.Fatalf("read project settings: %v", err)
-			}
-			if string(projectData) != projectSettings {
+			if projectData := readSetupTestFile(t, EntireSettingsFile); projectData != projectSettings {
 				t.Fatalf("adding an external agent changed project settings:\n%s", projectData)
 			}
 
