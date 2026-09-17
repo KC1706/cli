@@ -236,6 +236,16 @@ External commands are arbitrary executables. No SDK, no protocol, no manifest. T
 - **Arguments after the command name pass through verbatim.** `entire pgr --help foo` invokes `entire-pgr` with argv `["--help", "foo"]`. Cobra's flag parsing does not run.
 - **Windows.** On Windows, `exec.LookPath` resolves `.exe`, `.bat`, and `.cmd` extensions automatically. The "found but not executable" path is Unix-only — Windows treats extension match as the only correctness signal.
 
+### Settings are not a plugin extension point
+
+`.entire/settings.json` is decoded with `DisallowUnknownFields`, so a key the CLI does not ship makes the whole settings load fail — and a settings-load failure disables the CLI in that repository, not just the feature that owns the key. A plugin therefore **cannot** put its configuration there: doing so would require the CLI to ship a field for every plugin, which is the coupling external commands exist to avoid.
+
+Plugins own a separate file instead. `entire-investigate` uses `.entire/investigate.local.json`; `entire-brain` and `entire-graph` use root-level `.brainignore` / `.graphignore`. A plugin that needs to *read* CLI settings should parse the file itself with a narrow struct and plain `json.Unmarshal` (lenient), as `entire-brain` does for `strategy_options.checkpoint_push_remote` — not add a field here.
+
+One consequence for anything extracted out of the CLI: the key it used to own has to stay accepted. `EntireSettings.Investigate` is retained as an unread `json.RawMessage` for exactly that reason, since every repo that ran the built-in command has an `investigate` block left in its local settings file. Removing the field would break those repos on upgrade.
+
+Configuration that steers an approvals-disabled agent carries a further constraint: the CLI's `enforceAgentPromptTrust` can only gate fields it understands, so a plugin that accepts free-text agent instructions owns that decision itself. `entire-investigate` resolves it by having no committed config file at all — see [security and privacy](../security-and-privacy.md#why-agent-instruction-fields-are-local-only).
+
 ## What External Commands Do Not Get
 
 - **No checkpoint integration.** File modifications are not tracked in checkpoints. External commands do not appear in `entire activity`. If a tool needs to participate in the session/checkpoint lifecycle, it must use the [agent protocol](external-agent-protocol.md) instead.

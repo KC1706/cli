@@ -154,9 +154,17 @@ type EntireSettings struct {
 	// `entire review`.
 	ReviewFixAgent string `json:"review_fix_agent,omitempty"`
 
-	// Investigate holds configuration for `entire investigate`. Empty means
-	// `entire investigate` triggers the first-run picker.
-	Investigate *InvestigateConfig `json:"investigate,omitempty"`
+	// Deprecated: `entire investigate` moved to the entire-investigate plugin,
+	// which owns its configuration in .entire/investigate.local.json. This
+	// field is no longer read by anything.
+	//
+	// It is kept, and kept as a raw message, so the strict loader
+	// (DisallowUnknownFields) still accepts an "investigate" key left behind in
+	// an existing settings file. Dropping it outright would make settings
+	// unloadable — and so the whole CLI unusable — in every repository that
+	// still has one. Same reasoning as LocalDev above. Do not reintroduce a
+	// typed struct here: the plugin parses its own file.
+	Investigate json.RawMessage `json:"investigate,omitempty"`
 
 	// CommitLinking controls how commits are linked to agent sessions.
 	// "always" = auto-link without prompting, "prompt" = ask on each commit.
@@ -519,40 +527,6 @@ func (c ReviewConfig) IsZero() bool {
 	return c.Agent == "" && c.Model == "" && len(c.Skills) == 0 && c.Prompt == ""
 }
 
-// InvestigateConfig holds the configuration for `entire investigate`.
-// Unlike ReviewConfig, investigate runs the same shared prompt across
-// all configured agents, so the schema is a flat agent list with global
-// loop knobs rather than per-agent skill lists.
-type InvestigateConfig struct {
-	// Agents is the ordered list of agent names to round-robin during the loop.
-	Agents []string `json:"agents,omitempty"`
-
-	// MaxTurns is the per-agent turn budget. Defaults to 2 when zero
-	// (see investigate.defaultMaxTurns).
-	MaxTurns int `json:"max_turns,omitempty"`
-
-	// Quorum is the count of `approve` stances needed to terminate the loop.
-	// Zero means "all agents must approve" (matches marvin's default).
-	Quorum int `json:"quorum,omitempty"`
-
-	// AlwaysPrompt is appended to every turn's composed prompt, parallel
-	// to ReviewConfig.Prompt.
-	//
-	// Investigate agents run with approval checks disabled, so Load() honors
-	// this field only from an untracked .entire/settings.local.json and resets
-	// it to "" otherwise, the same gate ReviewConfig.Prompt gets. See
-	// enforceAgentPromptTrust.
-	AlwaysPrompt string `json:"always_prompt,omitempty"`
-}
-
-// IsZero reports whether the config is effectively unset.
-func (c *InvestigateConfig) IsZero() bool {
-	if c == nil {
-		return true
-	}
-	return len(c.Agents) == 0 && c.MaxTurns == 0 && c.Quorum == 0 && c.AlwaysPrompt == ""
-}
-
 // LocalLayerRejection reports why .entire/settings.local.json was ignored, or
 // "" when it was applied (or absent). A tracked local file is not local: it
 // arrives by cloning, so honoring it would let one developer's overrides —
@@ -586,16 +560,6 @@ func (s *EntireSettings) SymlinkedAgentDirsRejection() (reason string, rejected 
 		return "", false
 	}
 	return s.symlinkedAgentDirsRejection, true
-}
-
-// InvestigateConfig returns the configured investigate config. Returns nil
-// when no configuration is present; callers should check IsZero (or guard
-// for nil) to decide whether configuration is present.
-func (s *EntireSettings) InvestigateConfig() *InvestigateConfig {
-	if s == nil {
-		return nil
-	}
-	return s.Investigate
 }
 
 // BetterleaksEnabled reports whether the betterleaks scanner runs.
@@ -1370,19 +1334,16 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 	return nil
 }
 
-// mergeInvestigate replaces the investigate config from the override (whole-object
-// replacement, parallel to how summary_generation is handled but simpler — the
-// investigate schema is small and lacks per-field merge semantics).
+// mergeInvestigate carries a deprecated "investigate" key across the merge
+// unparsed. Nothing reads the value; the merge exists so an override layer
+// that still carries the key produces the same settings object as before,
+// rather than the key silently reappearing from a lower layer.
 func mergeInvestigate(settings *EntireSettings, raw map[string]json.RawMessage) error {
 	investigateRaw, ok := raw["investigate"]
 	if !ok {
 		return nil
 	}
-	var cfg InvestigateConfig
-	if err := unmarshalField("investigate", investigateRaw, &cfg); err != nil {
-		return err
-	}
-	settings.Investigate = &cfg
+	settings.Investigate = investigateRaw
 	return nil
 }
 
