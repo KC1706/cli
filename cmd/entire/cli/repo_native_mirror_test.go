@@ -458,3 +458,34 @@ func TestRepoMirrorAdd_NativeRefusesAHostBeforeAnyRequest(t *testing.T) {
 	require.ErrorContains(t, err, "invalid --cluster")
 	require.ErrorContains(t, err, "is not a cluster slug")
 }
+
+// TestHostForClusterSlug_FoldsCase pins one matching rule for cluster slugs.
+// Matching exactly here while the native path folded meant a single spelling of
+// --cluster was "unknown cluster" to one command and a valid target to another.
+func TestHostForClusterSlug_FoldsCase(t *testing.T) {
+	t.Parallel()
+	catalog := []coreapi.Cluster{{Slug: "aws-eu-central-1", PublicUrl: "https://aws-eu-central-1.entire.io"}}
+	for _, spelling := range []string{"aws-eu-central-1", "AWS-EU-CENTRAL-1", "Aws-Eu-Central-1"} {
+		host, err := hostForClusterSlug(catalog, spelling)
+		require.NoError(t, err, spelling)
+		require.Equal(t, "aws-eu-central-1.entire.io", host,
+			"the catalog's own spelling indexes the host map, so no casing can match and still miss the host")
+	}
+}
+
+// TestRepoRemoteUse_RefusesARepoWithNoCloneURL pins that a repo whose path is
+// not set yet — still provisioning — cannot silently blank a remote. `git
+// remote set-url` accepts an empty URL and exits 0, so the guard has to be
+// ours: verified in a scratch repo, `set-url origin ""` leaves `origin` with no
+// URL and reports success.
+func TestRepoRemoteUse_RefusesARepoWithNoCloneURL(t *testing.T) {
+	t.Parallel()
+	provisioning := &coreapi.Repo{
+		ID:          "01REPO",
+		Provider:    coreapi.NewOptString(repoProviderEntire),
+		ClusterSlug: coreapi.NewOptString("aws-us-east-2"),
+		// Path unset: the server has not minted clone coordinates yet.
+	}
+	require.Empty(t, nativeRepoURLAt(provisioning, "aws-us-east-2.entire.io"),
+		"no path means no URL, which is what the command must refuse to write")
+}

@@ -551,6 +551,18 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			if repoRef.forge == nativeCloneForge {
 				mirrorURL = nativeRepoURLAt(nativeRepo, chosen.ClusterHost)
 			}
+			// A native URL needs the repo's server-provided path, which a repo
+			// that is still provisioning does not have yet. `git remote set-url`
+			// accepts an empty URL and exits 0, so without this the command
+			// would report "✓ Repointed remote" while leaving the remote
+			// pointing nowhere — the one outcome worse than refusing.
+			if mirrorURL == "" {
+				cluster := clusterSlugByHost(clusters)[strings.ToLower(chosen.ClusterHost)]
+				if cluster == "" {
+					cluster = chosen.ClusterHost
+				}
+				return fmt.Errorf("%s has no clone URL on %s yet (still provisioning?); remote %q is unchanged", qualified, cluster, remote)
+			}
 
 			remotes, err := listGitRemotes(ctx, repoRoot)
 			if err != nil {

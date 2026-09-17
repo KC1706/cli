@@ -455,6 +455,14 @@ func runNativeMirrorRemove(cmd *cobra.Command, ref mirrorRepoRef, clusterSlug st
 		if err != nil {
 			return err
 		}
+		// Take the catalog's own spelling before the slug reaches the API, the
+		// same correction `add` makes. Sending a mixed-case slug to a
+		// case-sensitive delete would 404, and the catalog check below folds
+		// case — so the miss would then be reported as "no mirror on <cluster>"
+		// for a mirror that exists.
+		if cl, ok := clusterBySlug(clusters, clusterSlug); ok {
+			clusterSlug = cl.Slug
+		}
 		if primary := repo.ClusterSlug.Or(""); primary != "" && strings.EqualFold(primary, clusterSlug) {
 			return fmt.Errorf("%s lives on %s: that is its primary, not a mirror, and removing it is `entire repo delete %s`", name, primary, name)
 		}
