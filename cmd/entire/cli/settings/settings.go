@@ -164,6 +164,14 @@ type EntireSettings struct {
 	// unloadable — and so the whole CLI unusable — in every repository that
 	// still has one. Same reasoning as LocalDev above. Do not reintroduce a
 	// typed struct here: the plugin parses its own file.
+	//
+	// Any well-formed JSON value is accepted and none of it is interpreted.
+	// That is the whole contract — the shape of an old investigate block is
+	// not this CLI's business any more, and validating it would re-couple the
+	// two. Well-formed is not a promise this field makes, it is one the
+	// decoder has already kept: a json.RawMessage is only ever populated by a
+	// decoder that scanned the value to find its end, so malformed content
+	// fails the surrounding settings parse long before it reaches here.
 	Investigate json.RawMessage `json:"investigate,omitempty"`
 
 	// CommitLinking controls how commits are linked to agent sessions.

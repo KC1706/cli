@@ -1479,3 +1479,47 @@ func TestGetCheckpointPushRemote(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadFromBytes_LeftoverInvestigateKeyContract pins both halves of the
+// deprecated field's contract, because a reviewer reading `json.RawMessage`
+// reasonably asks whether unvalidated bytes are being carried forward.
+//
+// Any well-formed value is accepted and never interpreted; malformed content
+// is rejected by the surrounding parse, not by a check on this field. A
+// json.RawMessage is only ever populated by a decoder that scanned the value
+// to find its end, so validating it again here could never fail.
+func TestLoadFromBytes_LeftoverInvestigateKeyContract(t *testing.T) {
+	t.Parallel()
+
+	t.Run("arbitrary well-formed content is kept verbatim", func(t *testing.T) {
+		t.Parallel()
+		const raw = `{"agents":["x"],"max_turns":9,"a_field_no_CLI_ever_had":[1,{"y":null}]}`
+		s, err := LoadFromBytes([]byte(`{"enabled":true,"investigate":` + raw + `}`))
+		if err != nil {
+			t.Fatalf("LoadFromBytes: %v", err)
+		}
+		if string(s.Investigate) != raw {
+			t.Errorf("Investigate = %s, want the bytes verbatim %s", s.Investigate, raw)
+		}
+	})
+
+	t.Run("a non-object value is equally acceptable", func(t *testing.T) {
+		t.Parallel()
+		// Nothing reads the value, so its JSON type is not this CLI's business.
+		if _, err := LoadFromBytes([]byte(`{"enabled":true,"investigate":"a string"}`)); err != nil {
+			t.Errorf("LoadFromBytes with a scalar investigate value: %v", err)
+		}
+	})
+
+	t.Run("malformed content fails the surrounding parse", func(t *testing.T) {
+		t.Parallel()
+		for name, body := range map[string]string{
+			"syntax error": `{"enabled":true,"investigate":{broken}}`,
+			"truncated":    `{"enabled":true,"investigate":`,
+		} {
+			if _, err := LoadFromBytes([]byte(body)); err == nil {
+				t.Errorf("%s: want a parse error, got nil", name)
+			}
+		}
+	})
+}
