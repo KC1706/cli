@@ -109,8 +109,13 @@ func TestFindingJSONPreservesKeysAndReturnsNextCursor(t *testing.T) {
 				require.NotContains(t, got, "next_cursor")
 				require.JSONEq(t, `false`, string(got["has_more"]))
 			}
-			for _, key := range []string{`"discussion_id": "thread-example"`, `"discussion_message_count": 2`, `"repositoryId": "repo_example"`, `"reviewId": "review-example"`, `"filePath": "example.go"`, `"startLine": 2`, `"suggestedChanges"`, `"changeType": "manual_instruction"`, `"expectedFilePath": "example.go"`, `"targetCommentId": "other-example"`} {
+			for _, key := range []string{`"discussionId": "thread-example"`, `"discussionMessageCount": 2`, `"repositoryId": "repo_example"`, `"reviewId": "review-example"`, `"filePath": "example.go"`, `"startLine": 2`, `"suggestedChanges"`, `"changeType": "manual_instruction"`, `"expectedFilePath": "example.go"`, `"targetCommentId": "other-example"`} {
 				require.Contains(t, string(got["findings"]), key)
+			}
+			// The CLI's own output stays camelCase throughout; the cell's
+			// snake_case spelling must not leak through the presenter.
+			for _, leaked := range []string{`"discussion_id"`, `"discussion_message_count"`} {
+				require.NotContains(t, string(got["findings"]), leaked)
 			}
 			require.Contains(t, string(got["trail"]), `"originalBranch": "feature/example"`)
 			require.Contains(t, string(got["trail"]), `"textSnapshot": "Description"`)

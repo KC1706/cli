@@ -492,6 +492,15 @@ func printReviewStreamEvent(w io.Writer, ev reviewStreamEvent) {
 		fmt.Fprintf(w, "%ssuggested change %s updated by %s\n", prefix, ev.TargetID, actor)
 	case "suggested_change.check_result", "suggested_change.apply_result":
 		fmt.Fprintf(w, "%s%s for %s: %s\n", prefix, ev.EventType, payloadString(ev.Payload, "suggested_change_id"), payloadString(ev.Payload, "status"))
+	// Stored rows still carry the thread vocabulary (`thread.messageAdded`);
+	// entire-api snake-cases each segment and renames the domain on read, so
+	// these are the names that reach the stream.
+	case "discussion.created":
+		fmt.Fprintf(w, "%sdiscussion %s created for finding %s\n", prefix, ev.TargetID, payloadString(ev.Payload, "review_comment_id"))
+	case "discussion.message_added":
+		fmt.Fprintf(w, "%sdiscussion message %s added by %s\n", prefix, ev.TargetID, actor)
+	case "discussion.message_edited":
+		fmt.Fprintf(w, "%sdiscussion message %s edited by %s\n", prefix, ev.TargetID, actor)
 	case "comment.linked":
 		fmt.Fprintf(w, "%sfinding link created: %s → %s\n", prefix, payloadString(ev.Payload, "source_comment_id"), payloadString(ev.Payload, "target_comment_id"))
 	case "comment.unlinked":

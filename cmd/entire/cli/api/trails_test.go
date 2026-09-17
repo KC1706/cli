@@ -78,6 +78,11 @@ func TestClient_TrailRequestsUseSnakeCase(t *testing.T) {
 	if got["branch_name"] != "feature/test" || got["branch_action"] != "link" {
 		t.Fatalf("body = %#v", got)
 	}
+	for _, key := range []string{"branchName", "branchAction"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("body contains camelCase %q: %#v", key, got)
+		}
+	}
 }
 
 func TestClient_TrailsEnabled(t *testing.T) {

@@ -266,6 +266,39 @@ func TestPrintReviewStreamEventReadsSnakeCasePayload(t *testing.T) {
 	}
 }
 
+// entire-api renames the stored thread vocabulary on read, so these arrive as
+// discussion.* and must not fall through to the generic default line.
+func TestPrintReviewStreamEventRendersDiscussionEvents(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		eventType string
+		payload   map[string]any
+		want      string
+	}{
+		{"discussion.created", map[string]any{"review_comment_id": "rc_1"}, "discussion d_1 created for finding rc_1"},
+		{"discussion.message_added", nil, "discussion message d_1 added by alice"},
+		{"discussion.message_edited", nil, "discussion message d_1 edited by alice"},
+	} {
+		t.Run(tc.eventType, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			printReviewStreamEvent(&out, reviewStreamEvent{
+				EventType: tc.eventType,
+				TargetID:  "d_1",
+				ActorID:   "alice",
+				Payload:   tc.payload,
+			})
+			got := out.String()
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("output = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(got, "discussion/") {
+				t.Fatalf("output = %q fell through to the default branch", got)
+			}
+		})
+	}
+}
+
 func TestStreamOnce_SendsLastEventIDHeader(t *testing.T) {
 	frames := []string{
 		"event: reconnect\ndata: {\"reason\":\"max_duration\"}\n\n",

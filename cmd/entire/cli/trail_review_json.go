@@ -30,8 +30,8 @@ type trailReviewCommentJSON struct {
 	UpdatedAt                 time.Time                        `json:"updatedAt"`
 	Location                  trailReviewLocationJSON          `json:"location"`
 	SuggestedChanges          []trailReviewSuggestedChangeJSON `json:"suggestedChanges,omitempty"`
-	DiscussionID              *string                          `json:"discussion_id,omitempty"`
-	DiscussionMessageCount    int                              `json:"discussion_message_count,omitempty"`
+	DiscussionID              *string                          `json:"discussionId,omitempty"`
+	DiscussionMessageCount    int                              `json:"discussionMessageCount,omitempty"`
 	OutgoingLinks             []trailReviewOutgoingLinkJSON    `json:"outgoingLinks,omitempty"`
 }
 
