@@ -6,7 +6,7 @@ shellcheck = 'latest'
 tmux = 'latest'
 "go:github.com/entireio/roger-roger/cmd/roger-roger" = 'latest'
 "go:github.com/entireio/roger-roger/cmd/entire-agent-roger-roger" = 'latest'
-"go:github.com/tc-hib/go-winres" = '0.3.3'
+"go:github.com/josephspurrier/goversioninfo/cmd/goversioninfo" = 'v1.7.0'
 
 [tasks.fmt]
 description = "Run gofmt"
