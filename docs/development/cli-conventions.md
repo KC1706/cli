@@ -194,13 +194,7 @@ the commands are always runnable in every build.
   public path as its data primary). The mirror listing and the cluster catalog
   are best-effort without `--cluster`: if either fails (a core that 404s or
   503s the listing, a catalog hiccup), resolution degrades to the home cluster
-  instead of failing a clone that has always worked. The same
-  no-regression rule shapes the non-interactive case: without a terminal a
-  native ref falls back to its home cluster (`placementPicker.defaultHost`,
-  disclosed on stderr with the alternatives) rather than demanding
-  `--cluster` — a native clone resolved with no flag before mirrors existed,
-  unlike a multi-cluster `/gh/` ref, which has no canonical placement and
-  keeps the pass-`--cluster` error.
+  instead of failing a clone that has always worked.
   A trailing `.git` is never part of a repo name, on **either** backend
   (`gitDirSuffix` documents the mechanics): every ref parser drops it and `repo
   create` refuses a name ending in it. This is a deliberate client-side

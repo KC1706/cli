@@ -211,9 +211,7 @@ func resolveNativeRepo(ctx context.Context, c nativeRepoResolverClient, project,
 // path is the repo's, and the host is one of its readable placements — the
 // home cluster or a ready native mirror, chosen through the same
 // selectPlacement flow as the /gh/ mirror path (clusterSel honors --cluster;
-// with several placements and no selector it prompts, and without a terminal
-// it falls back to the home cluster — the canonical placement a native repo
-// always has and every pre-mirror script relied on). A native mirror serves
+// with several placements and no selector it prompts). A native mirror serves
 // the same public path as its data primary (that is the placement's routing
 // path on the target cluster), so only the host varies. repoName arrives with
 // any `.git` suffix already dropped by the parser (see gitDirSuffix).
@@ -241,7 +239,6 @@ func resolveNativeCloneURL(ctx context.Context, cmd *cobra.Command, c *coreapi.C
 	if err != nil {
 		return "", err
 	}
-	picker.defaultHost = strings.TrimSpace(repo.ClusterHost.Or(""))
 	chosen, err := selectPlacement(cmd, placements, clusterSel, picker)
 	if err != nil {
 		return "", err
@@ -483,8 +480,7 @@ func newRepoCloneCmd() *cobra.Command {
 			"cluster and its ready native mirrors, or a GitHub repo's mirror " +
 			"clusters. On a single cluster it clones directly; on more than one, it " +
 			"prompts you to pick which to clone from (or pass --cluster to choose " +
-			"non-interactively). Without a terminal, a native ref falls back to its " +
-			"home cluster; a /gh/ ref requires --cluster.\n\n" +
+			"non-interactively).\n\n" +
 			"A full `entire://` URL already names the cluster, so it's passed straight " +
 			"through to `git clone` with no lookup (and --cluster is ignored). The " +
 			"optional [target-dir] is passed through to `git clone` either way.",
@@ -716,15 +712,6 @@ type placementPicker struct {
 	// ("Clone", "Remote update") — handleFormCancellation prints
 	// "<action> cancelled."
 	action string
-	// defaultHost, when set, is the placement to use without prompting when no
-	// terminal is available: the caller has a canonical default among the
-	// placements (a native repo's home cluster), so a script keeps working —
-	// as it did before mirrors were offered — instead of being told to pass
-	// --cluster. Empty means no placement is canonical (GitHub mirrors) and
-	// non-interactive multi-placement resolution errors. Set per call, not in
-	// the per-verb constructors, because the default is a property of the
-	// resolved repo.
-	defaultHost string
 }
 
 const clusterSelectorFlag = "--cluster"
@@ -800,14 +787,6 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 
 	if !interactive.CanPromptInteractively() {
-		// The note goes to stderr so `repo remote url`'s captured stdout stays
-		// one URL and one newline; naming the alternatives keeps the fallback
-		// discoverable from the very run that took it.
-		if match, ok := byHost[strings.ToLower(p.defaultHost)]; ok && p.defaultHost != "" {
-			fmt.Fprintf(cmd.ErrOrStderr(), "No terminal to pick a cluster; using %s. Pass %s to choose one of: %s\n",
-				match.ClusterHost, p.selector, strings.Join(hosts, ", "))
-			return match, nil
-		}
 		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is mirrored on %d clusters; pass %s to choose one of: %s", len(hosts), p.selector, strings.Join(hosts, ", "))
 	}
 

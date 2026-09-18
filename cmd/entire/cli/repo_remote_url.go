@@ -19,9 +19,6 @@ func newRepoRemoteURLCmd() *cobra.Command {
 			"readable from — a native repo's home cluster and its ready native mirrors, " +
 			"or a GitHub repo's mirror clusters. On more than one, prompts for a " +
 			"placement interactively; pass --cluster to choose non-interactively. " +
-			"Without a terminal, a native ref falls back to its home cluster (noted " +
-			"on stderr, so captured stdout stays one URL); a /gh/ ref requires " +
-			"--cluster. " +
 			"--cluster is ignored for a full entire:// URL, which already names its " +
 			"cluster.",
 		Example: "  entire repo remote url /et/project/example\n" +
