@@ -648,6 +648,11 @@ func runMirrorAdd(cmd *cobra.Command, repoRef string, clusterSlugs []string, opt
 	if err != nil {
 		return err
 	}
+	if len(chosen) == 0 {
+		// A cancelled picker reports itself and returns no selection; running an
+		// empty batch would print a progress block and a table for nothing.
+		return nil
+	}
 	results := createMirrors(cmd.Context(), cmd.ErrOrStderr(), oneRepoTargets(ref, nativeRepo, chosen), opts)
 	return reportMirrorResults(cmd.OutOrStdout(), cmd.ErrOrStderr(), results)
 }

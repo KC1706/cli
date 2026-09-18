@@ -182,6 +182,12 @@ func runMirrorRemove(cmd *cobra.Command, repoRef string, clusterSlugs []string) 
 	if err != nil {
 		return err
 	}
+	if len(chosen) == 0 {
+		// A cancelled picker reports itself and returns no selection (see
+		// handleFormCancellation). Stop here rather than running an empty batch,
+		// which would print a progress block and a headerless table for nothing.
+		return nil
+	}
 	results := removeMirrors(cmd.Context(), cmd.ErrOrStderr(), oneRepoTargets(ref, nativeRepo, chosen))
 	return reportMirrorRemoveResults(cmd.OutOrStdout(), cmd.ErrOrStderr(), results)
 }
@@ -212,7 +218,7 @@ func pickRemoveRegions(ctx context.Context, w io.Writer, placements []mirrorPlac
 				Height(uiform.SingleLineMultiSelectHeight(len(opts))).
 				Validate(func(s []string) error {
 					if len(s) == 0 {
-						return errors.New("select at least one mirror, or press Esc to cancel")
+						return errors.New("select at least one mirror")
 					}
 					return nil
 				}).
