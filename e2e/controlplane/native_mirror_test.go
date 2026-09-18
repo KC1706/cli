@@ -125,7 +125,7 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 		require.Contains(t, native, ref, "--forge et lists native repos by their forge-qualified ref")
 
 		gh, _ := mustRunEntire(t, dir, "repo", "mirror", "list", "--all", "--json")
-		require.NotContains(t, gh, ref, "the default view is GitHub and must not change")
+		require.NotContains(t, gh, ref, "the default view is GitHub and must not change") //TODO: this should be addressed in a follow up PR.  this command should print both forges
 	})
 
 	phase("refusals cost no write", func(t *testing.T) {
