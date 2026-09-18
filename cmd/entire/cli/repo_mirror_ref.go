@@ -18,6 +18,11 @@ type mirrorRepoRef struct {
 	repo  string
 }
 
+// qualified renders the ref back the way the user must type it.
+func (r mirrorRepoRef) qualified() string {
+	return "/" + r.forge + "/" + r.owner + "/" + r.repo
+}
+
 // forgeNoun / forgePluralNoun name a forge the way an error should: what KIND
 // of repository is being talked about, not which path token spells it.
 var (

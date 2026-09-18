@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,72 +144,58 @@ func TestRepoMirrorAdd_Flags(t *testing.T) {
 	require.ErrorContains(t, add.Args(add, []string{"github.com/o/r", "aws-us-east-2.entire.io"}), "accepts at most 1 arg")
 }
 
-// TestReportOneShotMirror exercises the one-shot add's presentation across
-// the shared lifecycle outcomes driven by mirrorAddOutcome.
-func TestReportOneShotMirror(t *testing.T) {
+// TestReportMirrorResults pins the presentation every add now shares — one
+// repo on one cluster reports exactly like several on several, because the
+// one-shot path and the wizard hand the same results to the same reporter.
+func TestReportMirrorResults(t *testing.T) {
 	t.Parallel()
-	const id = "01KS6KFJR2XS6PZ188MVYE07AN"
 	const mirrorURL = "entire://eu-west-1.entire.io/gh/octocat/hello-world"
-	mk := func() *coreapi.CreatedMirror {
-		return &coreapi.CreatedMirror{MirrorId: id, MirrorUrl: mirrorURL}
-	}
 
-	t.Run("create failure surfaces with nothing printed", func(t *testing.T) {
+	t.Run("a ready row is listed and offered as a clone command", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
-		wantErr := errors.New("boom")
-		err := reportOneShotMirror(&out, &errW, mirrorAddOutcome{}, wantErr)
-		require.ErrorIs(t, err, wantErr)
-		require.Empty(t, out.String())
-	})
-
-	t.Run("no-wait prints in-progress hint", func(t *testing.T) {
-		t.Parallel()
-		var out, errW bytes.Buffer
-		err := reportOneShotMirror(&out, &errW, mirrorAddOutcome{created: mk()}, nil)
+		err := reportMirrorResults(&out, &errW, []mirrorResult{
+			{forge: mirrorCloneForge, owner: "octocat", repo: "hello-world", regionLabel: "eu-west-1", status: mirrorStatusReady, cloneURL: mirrorURL},
+		})
 		require.NoError(t, err)
-		require.Contains(t, out.String(), "Mirror placed at "+mirrorURL)
-		require.Contains(t, out.String(), "Mirror ID: "+id)
-		require.Contains(t, out.String(), "still be in progress")
-	})
-
-	t.Run("ready prints clone hint", func(t *testing.T) {
-		t.Parallel()
-		var out, errW bytes.Buffer
-		outcome := mirrorAddOutcome{created: mk(), status: coreapi.MirrorStatusReady, polled: true}
-		err := reportOneShotMirror(&out, &errW, outcome, nil)
-		require.NoError(t, err)
+		require.Contains(t, out.String(), "/gh/octocat/hello-world")
 		require.Contains(t, out.String(), "git clone "+mirrorURL)
 	})
 
-	t.Run("suspended surfaces support guidance as SilentError", func(t *testing.T) {
+	// A placement that is registered but not yet cloned must not be offered as
+	// a clone command: the URL does not work yet.
+	t.Run("a registered row is listed without a clone command", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
-		outcome := mirrorAddOutcome{created: mk(), status: coreapi.MirrorStatusSuspended, polled: true}
-		err := reportOneShotMirror(&out, &errW, outcome, errMirrorSuspended)
-		var silent *SilentError
-		require.ErrorAs(t, err, &silent)
-		require.Contains(t, errW.String(), "Contact support")
-		require.NotContains(t, errW.String(), "entire-core")
+		err := reportMirrorResults(&out, &errW, []mirrorResult{
+			{forge: mirrorCloneForge, owner: "octocat", repo: "hello-world", regionLabel: "eu-west-1", status: mirrorStatusRegistered, cloneURL: mirrorURL},
+		})
+		require.NoError(t, err)
+		require.Contains(t, out.String(), mirrorStatusRegistered)
 		require.NotContains(t, out.String(), "git clone")
 	})
 
-	t.Run("failed returns an error naming the mirror", func(t *testing.T) {
+	// One failure fails the command but must not hide the ones that worked:
+	// the table still lists everything, and the error names only the failures.
+	t.Run("a partial failure exits non-zero and still reports the successes", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
-		outcome := mirrorAddOutcome{created: mk(), status: coreapi.MirrorStatusFailed, polled: true}
-		err := reportOneShotMirror(&out, &errW, outcome, errMirrorCloneFailed)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), id)
+		err := reportMirrorResults(&out, &errW, []mirrorResult{
+			{forge: mirrorCloneForge, owner: "octocat", repo: "hello-world", regionLabel: "eu-west-1", status: mirrorStatusReady, cloneURL: mirrorURL},
+			{forge: nativeCloneForge, owner: "acme", repo: "web", regionLabel: "aws-ap-south-1", status: mirrorStatusFailed, err: errors.New("the seed failed")},
+		})
+		var silent *SilentError
+		require.ErrorAs(t, err, &silent)
+		require.ErrorContains(t, err, "1 mirror(s) failed")
+		require.Contains(t, out.String(), "git clone "+mirrorURL, "the successful one is still usable")
+		require.Contains(t, errW.String(), "/et/acme/web @ aws-ap-south-1: the seed failed")
 	})
 
-	t.Run("timeout propagates the wait error", func(t *testing.T) {
+	t.Run("no results prints nothing", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
-		wantErr := errors.New("timed out waiting for initial clone")
-		outcome := mirrorAddOutcome{created: mk(), status: coreapi.MirrorStatusProcessing, polled: true}
-		err := reportOneShotMirror(&out, &errW, outcome, wantErr)
-		require.ErrorIs(t, err, wantErr)
+		require.NoError(t, reportMirrorResults(&out, &errW, nil))
+		require.Empty(t, out.String())
 	})
 }
 
@@ -1622,37 +1609,73 @@ func TestBuildRepoDir(t *testing.T) {
 	})
 }
 
-// TestResolveOneShotClusterHost_NonInteractive locks in what a non-interactive
-// `repo mirror add <repo>` targets when --cluster is omitted: defaultClusterSlug,
-// resolved through the control plane's own catalog. The default is a slug like
-// every other --cluster value, so it has to be looked up rather than hardcoded
-// as a host — and a default that is missing from the catalog is an error naming
-// what is there, never a silent fallback to some other cluster.
+// TestChooseMirrorAddRegions_NonInteractive locks in which clusters a
+// non-interactive `repo mirror add <repo>` targets. GitHub keeps a fixed
+// default so scripts are stable; a native repo has none, because which clusters
+// are eligible depends on the repo's own region. A default missing from the
+// catalog is an error naming what is there, never a silent fallback to some
+// other cluster.
 //
-// Under `go test`, CanPromptInteractively() is false, so this exercises exactly
-// the script path. Not parallel: swaps the package-level activeCoreClient seam.
-func TestResolveOneShotClusterHost_NonInteractive(t *testing.T) {
-	t.Run("the default slug resolves to its catalog host", func(t *testing.T) {
-		serveClusters(t, []coreapi.Cluster{
-			{Slug: "aws-eu-central-1", PublicUrl: "https://aws-eu-central-1.entire.io"},
-			{Slug: defaultClusterSlug, PublicUrl: "https://aws-us-east-2.entire.io"},
-		})
-		cmd := &cobra.Command{}
-		cmd.SetContext(t.Context())
-		got, err := resolveOneShotClusterHost(cmd)
+// Under `go test`, CanPromptInteractively() is false, so this is exactly the
+// script path.
+func TestChooseMirrorAddRegions_NonInteractive(t *testing.T) {
+	t.Parallel()
+	clusters := []coreapi.Cluster{
+		{Slug: "aws-eu-central-1", Jurisdiction: "eu", PublicUrl: "https://aws-eu-central-1.entire.io"},
+		{Slug: defaultClusterSlug, Jurisdiction: "us", PublicUrl: "https://aws-us-east-2.entire.io"},
+	}
+	regions := clustersToRegions(clusters)
+	ghRef := mirrorRepoRef{forge: mirrorCloneForge, owner: "acme", repo: "web"}
+	nativeRef := mirrorRepoRef{forge: nativeCloneForge, owner: "acme", repo: "web"}
+
+	t.Run("github falls back to the default slug", func(t *testing.T) {
+		t.Parallel()
+		got, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, clusters, regions, nil)
 		require.NoError(t, err)
-		require.Equal(t, "aws-us-east-2.entire.io", got)
+		require.Len(t, got, 1)
+		require.Equal(t, defaultClusterSlug, got[0].slug)
 	})
 
 	t.Run("a default absent from the catalog errors naming the available clusters", func(t *testing.T) {
-		serveClusters(t, []coreapi.Cluster{
-			{Slug: "aws-eu-central-1", PublicUrl: "https://aws-eu-central-1.entire.io"},
-		})
-		cmd := &cobra.Command{}
-		cmd.SetContext(t.Context())
-		_, err := resolveOneShotClusterHost(cmd)
+		t.Parallel()
+		only := clusters[:1]
+		_, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, only, clustersToRegions(only), nil)
 		require.ErrorContains(t, err, defaultClusterSlug)
 		require.ErrorContains(t, err, "aws-eu-central-1")
+	})
+
+	t.Run("several named clusters all resolve", func(t *testing.T) {
+		t.Parallel()
+		got, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, clusters, regions,
+			[]string{"aws-eu-central-1", defaultClusterSlug})
+		require.NoError(t, err)
+		require.Equal(t, []string{"aws-eu-central-1", defaultClusterSlug}, regionSlugs(got))
+	})
+
+	// Naming a cluster twice asks for one placement, not two — the create is
+	// idempotent per (repo, cluster), so a duplicate would race itself.
+	t.Run("a repeated cluster collapses", func(t *testing.T) {
+		t.Parallel()
+		got, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, clusters, regions,
+			[]string{"aws-eu-central-1", "AWS-EU-CENTRAL-1"})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+	})
+
+	// A batch must not half-apply on a mistake: one bad slug refuses the lot.
+	t.Run("an unknown cluster refuses the whole batch", func(t *testing.T) {
+		t.Parallel()
+		_, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, clusters, regions,
+			[]string{"aws-eu-central-1", "nope"})
+		require.ErrorContains(t, err, "unknown cluster")
+	})
+
+	t.Run("a native repo has no safe default", func(t *testing.T) {
+		t.Parallel()
+		_, err := chooseMirrorAddRegions(&cobra.Command{}, nativeRef, nativeTestRepo(), clusters, regions, nil)
+		require.ErrorContains(t, err, "pass --cluster")
+		require.ErrorContains(t, err, "aws-eu-central-1", "it names the regions that ARE eligible")
+		require.NotContains(t, err.Error(), defaultClusterSlug, "the repo's own region is not one of them")
 	})
 }
 
@@ -1733,12 +1756,16 @@ func TestValidateClusterHost(t *testing.T) {
 	}
 }
 
-// TestRemoveMirror covers `repo mirror remove`'s DeleteMirror call:
-// removeMirror dials via runCoreForCluster, which the activeCoreClient test
-// seam does not intercept, so this drives the helper directly against an
-// httptest server the way the addAndAwaitMirror tests do.
-func TestRemoveMirror(t *testing.T) {
+// TestRemoveOneMirror covers one placement's teardown, the unit the parallel
+// remover fans out over. It drives the helper directly against an httptest
+// server because removeMirrors dials per target, which the activeCoreClient
+// seam does not intercept.
+func TestRemoveOneMirror(t *testing.T) {
 	t.Parallel()
+	target := mirrorTarget{
+		forge: mirrorCloneForge, owner: "octocat", repo: "hello-world",
+		region: regionChoice{slug: "aws-us-east-2", host: "aws-us-east-2.entire.io"},
+	}
 
 	t.Run("success", func(t *testing.T) {
 		t.Parallel()
@@ -1750,30 +1777,15 @@ func TestRemoveMirror(t *testing.T) {
 		c, err := coreapi.NewWithBearer(srv.URL, "tok")
 		require.NoError(t, err)
 
-		var out bytes.Buffer
-		err = removeMirror(t.Context(), &out, c, "octocat", "hello-world", "aws-us-east-2.entire.io")
-		require.NoError(t, err)
-		require.Contains(t, out.String(), "✓ Removed mirror github.com/octocat/hello-world from aws-us-east-2.entire.io")
+		got := removeOneMirror(t.Context(), target, c, nil, nil)
+		require.NoError(t, got.err)
+		require.Equal(t, mirrorStatusRemoved, got.status)
+		require.Equal(t, "/gh/octocat/hello-world", got.ref())
 	})
 
-	t.Run("decoded 404 appends server detail", func(t *testing.T) {
-		t.Parallel()
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			writeNotFoundProblem(t, w)
-		}))
-		t.Cleanup(srv.Close)
-		c, err := coreapi.NewWithBearer(srv.URL, "tok")
-		require.NoError(t, err)
-
-		var out bytes.Buffer
-		err = removeMirror(t.Context(), &out, c, "octocat", "hello-world", "aws-us-east-2.entire.io")
-		require.Error(t, err)
-		require.ErrorContains(t, err, "may be on a different cluster")
-		require.ErrorContains(t, err, "(server: not found)")
-		require.Empty(t, out.String())
-	})
-
-	t.Run("non-404 server error passes through the problem detail", func(t *testing.T) {
+	// A failure folds into the result rather than returning: one placement must
+	// not sink a batch of them.
+	t.Run("a server error becomes a failed row, not a returned error", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/problem+json")
@@ -1786,11 +1798,19 @@ func TestRemoveMirror(t *testing.T) {
 		c, err := coreapi.NewWithBearer(srv.URL, "tok")
 		require.NoError(t, err)
 
-		var out bytes.Buffer
-		err = removeMirror(t.Context(), &out, c, "octocat", "hello-world", "aws-us-east-2.entire.io")
-		require.Error(t, err)
-		require.Equal(t, "boom", coreapi.APIError(err))
-		require.Empty(t, out.String())
+		got := removeOneMirror(t.Context(), target, c, nil, nil)
+		require.Error(t, got.err)
+		require.Equal(t, mirrorStatusError, got.status)
+		// Rendered for display, like createOneMirror's failures: the row carries
+		// the server's own detail rather than ogen's decoded struct.
+		require.ErrorContains(t, got.err, "boom")
+	})
+
+	t.Run("a client that could not be built fails only its own row", func(t *testing.T) {
+		t.Parallel()
+		got := removeOneMirror(t.Context(), target, nil, errors.New("no login for that cluster"), nil)
+		require.ErrorContains(t, got.err, "no login for that cluster")
+		require.Equal(t, mirrorStatusError, got.status)
 	})
 }
 
@@ -2062,17 +2082,12 @@ func TestRepoMirrorList_GroupedFlagHelp(t *testing.T) {
 }
 
 // seamClusterCoreClient routes every cluster-addressed core call at client for
-// the test's duration and records the cluster host each call named.
-func seamClusterCoreClient(t *testing.T, client *coreapi.Client) *[]string {
+// the test's duration.
+func seamClusterCoreClient(t *testing.T, client *coreapi.Client) {
 	t.Helper()
-	var hosts []string
 	prev := clusterCoreClient
-	clusterCoreClient = func(_ context.Context, host string) (*coreapi.Client, error) {
-		hosts = append(hosts, host)
-		return client, nil
-	}
+	clusterCoreClient = func(context.Context, string) (*coreapi.Client, error) { return client, nil }
 	t.Cleanup(func() { clusterCoreClient = prev })
-	return &hosts
 }
 
 // testClusterCatalog is the catalog the cluster-flag tests resolve --cluster
@@ -2083,26 +2098,63 @@ var testClusterCatalog = []coreapi.Cluster{
 	{Slug: defaultClusterSlug, PublicUrl: "https://aws-us-east-2.entire.io"},
 }
 
-// TestRepoMirrorRemove_ClusterFlag pins how `mirror remove` names its cluster:
-// --cluster takes the catalog SLUG and the command resolves it to the public
-// host it dials, omitting it means the default slug, an unknown slug fails
-// before any request, and a second positional is not an address.
+// serveRemovePlacements stands up the active-context half of `mirror remove`:
+// the cluster catalog, and the pull-gated placement list that says where the
+// repo actually is. The delete itself goes to the cluster's own core, which
+// seamClusterCoreClient intercepts separately.
+func serveRemovePlacements(t *testing.T, hosts ...string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == testClustersPath:
+			assert.NoError(t, printJSON(w, &coreapi.ListClustersOutputBody{Clusters: testClusterCatalog}))
+		case strings.HasSuffix(r.URL.Path, "/mirrors/placements"):
+			placements := make([]coreapi.ResolvedPlacement, 0, len(hosts))
+			for _, h := range hosts {
+				placements = append(placements, coreapi.ResolvedPlacement{ClusterHost: h})
+			}
+			assert.NoError(t, printJSON(w, &coreapi.ResolvePlacementsOutputBody{Placements: placements}))
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	prev := activeCoreClient
+	activeCoreClient = func(context.Context) (*coreapi.Client, error) {
+		return coreapi.NewWithBearer(srv.URL, "tok")
+	}
+	t.Cleanup(func() { activeCoreClient = prev })
+}
+
+// TestRepoMirrorRemove_ClusterFlag pins how `mirror remove` chooses what to
+// remove: --cluster takes catalog SLUGS and several at once, the command
+// resolves each to the host it dials, and there is NO default — removing is
+// destructive and which clusters a repo is on is a property of the repo, so a
+// non-interactive run with no --cluster refuses rather than guessing.
 //
 // Not parallel: swaps the package-level activeCoreClient and clusterCoreClient
 // seams.
 func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 	var deleted []string
+	var mu sync.Mutex
 	client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		}
+		mu.Lock()
 		deleted = append(deleted, r.URL.Query().Get("clusterHost"))
+		mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
-	serveClusters(t, testClusterCatalog)
-	hosts := seamClusterCoreClient(t, client)
+	// The repo is mirrored on both catalog clusters, so either can be removed.
+	serveRemovePlacements(t, "eu.example", "aws-us-east-2.entire.io")
+	seamClusterCoreClient(t, client)
 	run := func(args ...string) (stdout string, err error) {
-		deleted, *hosts = nil, nil
+		mu.Lock()
+		deleted = nil
+		mu.Unlock()
 		cmd := newRepoMirrorRemoveCmd()
 		var out bytes.Buffer
 		cmd.SetOut(&out)
@@ -2115,15 +2167,24 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 	t.Run("--cluster names the cluster by slug", func(t *testing.T) {
 		stdout, err := run("/gh/o/r", "--cluster", "eu")
 		require.NoError(t, err)
-		require.Contains(t, stdout, "Removed mirror github.com/o/r from eu.example")
-		require.Equal(t, []string{"eu.example"}, *hosts)
 		require.Equal(t, []string{"eu.example"}, deleted)
+		require.Contains(t, stdout, "/gh/o/r")
+		require.Contains(t, stdout, mirrorStatusRemoved)
 	})
 
-	t.Run("omitted means the default cluster", func(t *testing.T) {
-		_, err := run("/gh/o/r")
+	// The whole point of accepting several: one invocation, one summary.
+	t.Run("several clusters are removed in one run", func(t *testing.T) {
+		_, err := run("/gh/o/r", "--cluster", "eu,aws-us-east-2")
 		require.NoError(t, err)
-		require.Equal(t, []string{"aws-us-east-2.entire.io"}, deleted)
+		require.ElementsMatch(t, []string{"eu.example", "aws-us-east-2.entire.io"}, deleted)
+	})
+
+	// No default: guessing a cluster would delete a copy the caller never named.
+	t.Run("omitting --cluster refuses and names where the repo is", func(t *testing.T) {
+		_, err := run("/gh/o/r")
+		require.ErrorContains(t, err, "pass --cluster")
+		require.ErrorContains(t, err, "eu")
+		require.Empty(t, deleted)
 	})
 
 	t.Run("a host is not a cluster slug", func(t *testing.T) {
@@ -2132,10 +2193,11 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 		require.Empty(t, deleted)
 	})
 
-	t.Run("an unknown slug names the available ones and sends nothing", func(t *testing.T) {
+	// Answered against the repo's own placements, not the catalog: "not
+	// mirrored there" is the useful answer when the cluster exists.
+	t.Run("a cluster the repo is not on names the ones it is", func(t *testing.T) {
 		_, err := run("/gh/o/r", "--cluster", "nope")
-		require.ErrorContains(t, err, "unknown cluster")
-		require.ErrorContains(t, err, "eu")
+		require.ErrorContains(t, err, "is not mirrored on")
 		require.Empty(t, deleted)
 	})
 

@@ -118,8 +118,17 @@ the commands are always runnable in every build.
   branch without the flag never lowers it and `--server-side-merge-only=false`
   is the explicit way down. A short branch name expands to `refs/heads/`,
   `HEAD` and `refs/...` pass through. The `mirror` subtree is
-  server-side (`add`, `list`, `get`, `remove`; `add` and `remove` name the
-  cluster with `--cluster <slug>`) and serves **both forges**. A GitHub mirror
+  server-side (`add`, `list`, `get`, `remove`; `add` and `remove` name clusters
+  with `--cluster <slug>`, repeatable or comma-separated, and place or tear down
+  every named cluster in parallel through one engine — `mirrorTargets` →
+  `createMirrors`/`removeMirrors` → a summary table — so a one-shot verb reports
+  exactly like the wizard. A failure on one cluster never stops the others; the
+  command exits non-zero naming the ones that failed. `add` defaults to one
+  fixed cluster without a terminal so scripts stay stable; `remove` has no
+  default at all, because which clusters a repo is on is a property of the repo
+  and guessing one would delete a copy nobody named — a terminal gets a
+  multi-select of the repo's actual placements with nothing pre-ticked, which is
+  also the confirmation) and serves **both forges**. A GitHub mirror
   is a clone of an upstream, created through the asynchronous mirror-request
   resource and addressed by `(provider, owner, repo, clusterHost)`. An
   Entire-native mirror is an extra placement of a repo Entire already holds,

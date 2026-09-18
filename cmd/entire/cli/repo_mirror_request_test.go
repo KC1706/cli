@@ -472,13 +472,15 @@ func TestRepoMirrorAdd_AsyncDefaultWhenSettingsFail(t *testing.T) {
 	cmd.SetErr(&stderr)
 	cmd.SetArgs([]string{"mirror", "add", "--no-wait", "--cluster", defaultClusterSlug, "/gh/owner/repo"})
 	require.NoError(t, cmd.ExecuteContext(t.Context()))
-	require.Contains(t, stdout.String(), "Mirror placed at entire://cluster/gh/owner/repo")
-	require.Contains(t, stdout.String(), "Mirror ID: mirror-1")
-	require.NotContains(t, stdout.String(), "Registered mirror")
-	require.NotContains(t, stdout.String(), "Mirror exists")
-	require.Contains(t, stderr.String(), "Queued mirror owner/repo")
-	require.Contains(t, stderr.String(), "Placing mirror owner/repo")
+	// A one-shot add reports through the same summary table as the wizard, so
+	// one repo on three clusters reads like three repos on three clusters.
+	require.Contains(t, stdout.String(), "/gh/owner/repo")
+	require.Contains(t, stdout.String(), defaultClusterSlug)
+	require.Contains(t, stdout.String(), mirrorStatusRegistered)
+	require.Contains(t, stdout.String(), "entire://cluster/gh/owner/repo")
+	require.NotContains(t, stdout.String(), mirrorStatusReady, "--no-wait does not wait for the clone")
 	require.Equal(t, []string{mirrorRequestsAPIPath, mirrorRequestPath(), mirrorRequestPath()}, paths)
+	_ = stderr
 }
 
 func TestCreateOneMirror_AsyncProgress(t *testing.T) {

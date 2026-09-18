@@ -396,7 +396,7 @@ type repoVisibility struct {
 	Visibility string `json:"visibility"`
 }
 
-var visibilityColumns = []string{"REPO", "VISIBILITY"}
+var visibilityColumns = []string{colHeaderRepo, "VISIBILITY"}
 
 func visibilityRow(v repoVisibility) []string {
 	return []string{v.Repo, v.Visibility}

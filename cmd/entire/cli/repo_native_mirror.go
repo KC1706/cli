@@ -11,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/internal/coreapi"
 )
 
@@ -275,113 +274,79 @@ func nativeMirrorBeingDeletedHint(err error, ref, clusterSlug string) error {
 		err, ref, clusterSlug, ref)
 }
 
-// runNativeMirrorAdd is `repo mirror add /et/<project>/<repo>`: place a replica
-// of a native repo on another cluster, then wait for it to become readable
-// unless --no-wait says otherwise.
+// createOneNativeMirror is the native half of the parallel engine
+// (createOneMirror dispatches here): place one replica and, unless --no-wait,
+// wait for it to be readable. Like its GitHub sibling it never returns an
+// error — every outcome folds into the mirrorResult so one failure cannot sink
+// the batch.
 //
-// Everything runs on the active-context client. The native-mirror routes are
-// home-core-scoped and answer 421 for a repo in another jurisdiction, which
-// coreapi's transport follows and re-authenticates on its own — so unlike the
-// GitHub path there is no cluster-fronting client to build.
-func runNativeMirrorAdd(cmd *cobra.Command, ref mirrorRepoRef, clusterSlug string, opts mirrorAddOptions) error {
-	name := nativeRefOf(ref)
-	return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
-		// Zero preserves the caller context without adding a timeout.
-		if opts.timeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, opts.timeout)
-			defer cancel()
-		}
-		repo, clusters, err := loadNativeRepo(ctx, c, ref)
-		if err != nil {
-			return err
-		}
-		if clusterSlug == "" {
-			if clusterSlug, err = pickNativeMirrorCluster(cmd, clusters, repo, name); err != nil {
-				return err
-			}
-		}
-		if err := checkNativeMirrorTarget(repo, clusters, clusterSlug, name); err != nil {
-			return err
-		}
-		// The catalog match folds case; the host map that builds the clone URL
-		// does not. Take the catalog's own spelling so a mixed-case --cluster
-		// cannot pass the check and then yield an empty clone URL.
-		if cl, ok := clusterBySlug(clusters, clusterSlug); ok {
-			clusterSlug = cl.Slug
-		}
+// The caller has already refused everything decidable without a write (see
+// checkNativeMirrorTarget), so what is left here is the create and the wait.
+func createOneNativeMirror(ctx context.Context, t mirrorTarget, c *coreapi.Client, clientErr error, opts mirrorAddOptions, report func(status string, final, ok bool)) mirrorResult {
+	res := mirrorResult{forge: t.forge, owner: t.owner, repo: t.repo, regionLabel: regionLabel(t.region)}
+	if clientErr != nil {
+		res.status, res.err = mirrorStatusError, clientErr
+		report(mirrorStatusError, true, false)
+		return res
+	}
+	// Zero preserves the caller context without adding a timeout.
+	if opts.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.timeout)
+		defer cancel()
+	}
 
-		out, errW := cmd.OutOrStdout(), cmd.ErrOrStderr()
-		created, err := c.CreateNativeMirror(ctx, &coreapi.CreateNativeMirrorInputBody{ClusterSlug: clusterSlug}, coreapi.CreateNativeMirrorParams{RepoId: repo.ID})
-		if err != nil {
-			return nativeMirrorBeingDeletedHint(err, name, clusterSlug)
-		}
-		// The endpoint is idempotent per (repo, cluster) and answers identically
-		// either way, so the row's own state is the only thing that can tell the
-		// user whether this call made the placement or found it.
-		if nativeMirrorIsFresh(*created) {
-			fmt.Fprintf(errW, "Placing %s on %s\n", name, clusterSlug)
-		} else {
-			fmt.Fprintf(errW, "%s is already placed on %s\n", name, clusterSlug)
-		}
+	report(string(mirrorAddPhasePlacing), false, false)
+	created, err := c.CreateNativeMirror(ctx,
+		&coreapi.CreateNativeMirrorInputBody{ClusterSlug: t.region.slug},
+		coreapi.CreateNativeMirrorParams{RepoId: t.nativeRepo.ID})
+	if err != nil {
+		res.status = mirrorStatusError
+		res.err = nativeMirrorBeingDeletedHint(renderCoreError(err), t.ref(), t.region.slug)
+		report(mirrorStatusError, true, false)
+		return res
+	}
+	res.cloneURL = nativeRepoURLAt(t.nativeRepo, t.region.host)
 
-		cloneURL := nativeCloneURL(clusters, clusterSlug, repo)
-		if opts.noWait {
-			reportNativeMirrorPlaced(out, *created, cloneURL)
-			return nil
-		}
+	// The endpoint is idempotent per (repo, cluster) and answers identically
+	// either way, so the row's own state is the only thing that can say whether
+	// this call made the placement or found it.
+	if !nativeMirrorIsFresh(*created) {
+		res.status = mirrorStatusExists
+		report(res.status, true, true)
+		return res
+	}
+	if opts.noWait {
+		res.status = mirrorStatusRegistered
+		report(res.status, true, true)
+		return res
+	}
 
-		stop := startSpinner(errW, fmt.Sprintf("Seeding %s on %s", name, clusterSlug))
-		final, waitErr := awaitNativeMirrorReady(ctx, c, repo.ID, clusterSlug)
-		stop(waitErr == nil)
-		if waitErr != nil {
-			return nativeMirrorWaitError(errW, waitErr, final, name, clusterSlug)
-		}
-		reportNativeMirrorReady(out, cloneURL)
-		return nil
-	})
+	report(string(mirrorAddPhaseCloning), false, false)
+	final, waitErr := awaitNativeMirrorReady(ctx, c, t.nativeRepo.ID, t.region.slug)
+	switch {
+	case waitErr == nil:
+		res.status = mirrorStatusReady
+	case errors.Is(waitErr, errNativeMirrorFailed):
+		res.status, res.err = mirrorStatusFailed, nativeMirrorDetail(final, "the seed failed")
+	case errors.Is(waitErr, errNativeMirrorSuspended):
+		res.status, res.err = mirrorStatusSuspended, nativeMirrorDetail(final, "the placement is suspended; an operator has to resume it")
+	case errors.Is(waitErr, context.DeadlineExceeded):
+		res.status, res.err = mirrorStatusTimedOut, waitErr
+	default:
+		res.status, res.err = mirrorStatusError, renderCoreError(waitErr)
+	}
+	report(res.status, true, res.err == nil)
+	return res
 }
 
-// pickNativeMirrorCluster chooses the target when --cluster was omitted. Only
-// clusters outside the repo's own region are offered, because v1 places a
-// native mirror cross-jurisdiction — listing the primary's region would offer a
-// choice that checkNativeMirrorTarget then refuses.
-//
-// Without a terminal there is nothing to fall back to: the GitHub path's fixed
-// default cluster cannot serve here, since it may be the repo's own region and
-// the right answer depends on the repo. Saying so beats guessing.
-func pickNativeMirrorCluster(cmd *cobra.Command, clusters []coreapi.Cluster, repo *coreapi.Repo, ref string) (string, error) {
-	home := repo.Jurisdiction.Or("")
-	eligible := make([]regionChoice, 0, len(clusters))
-	for _, r := range clustersToRegions(clusters) {
-		if home != "" && strings.EqualFold(r.jurisdiction, home) {
-			continue
-		}
-		eligible = append(eligible, r)
+// nativeMirrorDetail prefers the server's own reason for an unhealthy
+// placement, falling back to what the status alone can say.
+func nativeMirrorDetail(p coreapi.NativeMirrorPlacement, fallback string) error {
+	if detail := strings.TrimSpace(p.LastError.Or("")); detail != "" {
+		return errors.New(detail)
 	}
-	if len(eligible) == 0 {
-		return "", fmt.Errorf("no cluster outside %s's region (%s) is available to mirror into", ref, home)
-	}
-	if !interactive.CanPromptInteractively() {
-		return "", fmt.Errorf("pass --cluster to say where to mirror %s: a native mirror goes in a region other than the repo's own (%s), so there is no safe default (available: %s)",
-			ref, home, strings.Join(regionSlugs(eligible), ", "))
-	}
-	if len(eligible) == 1 {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Using cluster %s\n", eligible[0].slug)
-		return eligible[0].slug, nil
-	}
-	// The picker's option values are hosts (shared with the GitHub wizard), so
-	// map the choice back to the slug this verb acts on.
-	host, err := pickOneCluster(cmd.Context(), cmd.ErrOrStderr(), eligible, "")
-	if err != nil {
-		return "", err
-	}
-	for _, r := range eligible {
-		if r.host == host {
-			return r.slug, nil
-		}
-	}
-	return "", NewSilentError(errors.New("mirror add cancelled"))
+	return errors.New(fallback)
 }
 
 func regionSlugs(regions []regionChoice) []string {
@@ -391,108 +356,6 @@ func regionSlugs(regions []regionChoice) []string {
 	}
 	slices.Sort(out)
 	return out
-}
-
-// nativeCloneURL builds the entire:// URL for a native placement on
-// clusterSlug. The path is the repo's own server-provided one, so the URL names
-// the repo exactly as the control plane does; only the host is swapped for the
-// mirror's cluster. Empty when the cluster's public URL could not be validated
-// — a dashed URL is better than a spoofable one.
-func nativeCloneURL(clusters []coreapi.Cluster, clusterSlug string, repo *coreapi.Repo) string {
-	host := clusterHostBySlug(clusters)[clusterSlug]
-	path := strings.TrimSpace(repo.Path.Or(""))
-	if host == "" || path == "" {
-		return ""
-	}
-	return entireCloneURLScheme + host + "/" + strings.TrimPrefix(path, "/")
-}
-
-func reportNativeMirrorPlaced(w io.Writer, p coreapi.NativeMirrorPlacement, cloneURL string) {
-	fmt.Fprintf(w, "\nPlacement %s registered on %s\n", p.PlacementId, p.ClusterSlug)
-	if cloneURL != "" {
-		fmt.Fprintf(w, "Seeding may still be in progress; `git clone %s` will work once it completes.\n", cloneURL)
-	}
-}
-
-func reportNativeMirrorReady(w io.Writer, cloneURL string) {
-	if cloneURL == "" {
-		fmt.Fprintln(w, "\nMirror is ready.")
-		return
-	}
-	fmt.Fprintf(w, "\nClone it:\n  git clone %s\n", cloneURL)
-}
-
-// nativeMirrorWaitError turns a failed wait into the message that helps. The
-// process exits 1 for a timeout exactly as it does for a failure, so the text
-// has to carry the difference: a timed-out seed is still running and worth
-// checking on, while a failed one is not.
-func nativeMirrorWaitError(errW io.Writer, err error, p coreapi.NativeMirrorPlacement, ref, clusterSlug string) error {
-	if detail := strings.TrimSpace(p.LastError.Or("")); detail != "" {
-		fmt.Fprintf(errW, "Server reported: %s\n", detail)
-	}
-	switch {
-	case errors.Is(err, errNativeMirrorFailed):
-		return fmt.Errorf("seeding %s on %s failed", ref, clusterSlug)
-	case errors.Is(err, errNativeMirrorSuspended):
-		return fmt.Errorf("the mirror of %s on %s is suspended; an operator has to resume it", ref, clusterSlug)
-	case errors.Is(err, context.DeadlineExceeded):
-		return fmt.Errorf("%w; the mirror of %s on %s is still being created — check on it with `entire repo mirror get %s`", err, ref, clusterSlug, ref)
-	}
-	return err
-}
-
-// runNativeMirrorRemove is `repo mirror remove /et/<project>/<repo>`: tear down
-// one replica. Teardown is asynchronous, so the command records the intent and
-// then waits for the placement to disappear.
-//
-// The primary is refused by name: it is not in the native-mirror list at all,
-// so the endpoint could only answer "not found", which reads as though the repo
-// were not there.
-func runNativeMirrorRemove(cmd *cobra.Command, ref mirrorRepoRef, clusterSlug string) error {
-	name := nativeRefOf(ref)
-	return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
-		repo, clusters, err := loadNativeRepo(ctx, c, ref)
-		if err != nil {
-			return err
-		}
-		// Take the catalog's own spelling before the slug reaches the API, the
-		// same correction `add` makes. Sending a mixed-case slug to a
-		// case-sensitive delete would 404, and the catalog check below folds
-		// case — so the miss would then be reported as "no mirror on <cluster>"
-		// for a mirror that exists.
-		if cl, ok := clusterBySlug(clusters, clusterSlug); ok {
-			clusterSlug = cl.Slug
-		}
-		if primary := repo.ClusterSlug.Or(""); primary != "" && strings.EqualFold(primary, clusterSlug) {
-			return fmt.Errorf("%s lives on %s: that is its primary, not a mirror, and removing it is `entire repo delete %s`", name, primary, name)
-		}
-		if _, err := c.DeleteNativeMirror(ctx, coreapi.DeleteNativeMirrorParams{RepoId: repo.ID, ClusterSlug: clusterSlug}); err != nil {
-			if isCoreNotFound(err) {
-				// Deliberately not %w-wrapped: renderCoreError would replace this
-				// with the server's own detail, which cannot name the command
-				// that lists where the repo actually is.
-				//
-				// The catalog is consulted only to WORD the miss, after the
-				// delete was attempted: refusing an unknown slug up front would
-				// also refuse to tear down a placement whose cluster has since
-				// left the catalog, which is the one case you most need to.
-				if _, known := clusterBySlug(clusters, clusterSlug); !known {
-					return fmt.Errorf("unknown cluster %q; available: %s", clusterSlug, strings.Join(clusterSlugs(clusters), ", "))
-				}
-				return fmt.Errorf("no mirror of %s on %s (run `entire repo mirror get %s` to see its placements)", name, clusterSlug, name)
-			}
-			return err
-		}
-		errW := cmd.ErrOrStderr()
-		stop := startSpinner(errW, fmt.Sprintf("Removing the mirror of %s from %s", name, clusterSlug))
-		err = awaitNativeMirrorRemoved(ctx, c, repo.ID, clusterSlug)
-		stop(err == nil)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "✓ Removed the mirror of %s from %s\n", name, clusterSlug)
-		return nil
-	})
 }
 
 // runNativeMirrorGet is `repo mirror get /et/<project>/<repo>`: the repo's
