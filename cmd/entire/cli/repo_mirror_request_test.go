@@ -252,6 +252,15 @@ func TestCreateAndAwaitMirror_AsyncLocationValidation(t *testing.T) {
 	}
 }
 
+// pollPhaseTimeout is the deadline for the subtests that assert WHICH phase a
+// timeout lands in when that phase is a poll loop. It has to outlast one real
+// httptest round trip — the submission, which must NOT time out — while the
+// loop below it spins on the 1ms mirrorPollInterval and consumes whatever is
+// left. At 10ms a loaded `-race` run could spend the whole budget on the
+// submission and report the wrong phase, which is a flake in the assertion
+// rather than in the code.
+const pollPhaseTimeout = 250 * time.Millisecond
+
 func TestCreateAndAwaitMirror_AsyncTimeout(t *testing.T) {
 	useFastMirrorPolling(t)
 
@@ -282,7 +291,7 @@ func TestCreateAndAwaitMirror_AsyncTimeout(t *testing.T) {
 		})
 
 		_, err := addAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorAddOptions{
-			timeout: 10 * time.Millisecond,
+			timeout: pollPhaseTimeout,
 		})
 		require.ErrorContains(t, err, "timed out waiting for initial clone")
 	})
@@ -300,7 +309,7 @@ func TestCreateAndAwaitMirror_AsyncTimeout(t *testing.T) {
 		})
 
 		_, err := addAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorAddOptions{
-			timeout: 10 * time.Millisecond,
+			timeout: pollPhaseTimeout,
 		})
 		require.ErrorContains(t, err, "timed out waiting for mirror placement")
 	})
