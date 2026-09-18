@@ -499,17 +499,24 @@ func TestResolveNativeCloneURL(t *testing.T) {
 		require.Equal(t, "entire://aws-ap-southeast-2.entire.io/et/paul/dogbark", got)
 	})
 
-	t.Run("several placements and no terminal demand --cluster", func(t *testing.T) {
+	t.Run("several placements and no terminal fall back to the home cluster", func(t *testing.T) {
 		t.Parallel()
 		c := serveNativeRepoFixture(t, nativeRepoFixture{
 			repo:     native("aws-ap-southeast-2.entire.io", "/et/paul/dogbark"),
 			mirrors:  []coreapi.NativeMirrorPlacement{readyNativeMirror("aws-us-east-2")},
 			clusters: []coreapi.Cluster{usEast},
 		})
-		_, err := resolve(t, c, "")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "pass --cluster")
-		require.Contains(t, err.Error(), "aws-us-east-2.entire.io")
+		cmd := newCloneTestCmd()
+		var errOut strings.Builder
+		cmd.SetErr(&errOut)
+		got, err := resolveNativeCloneURL(t.Context(), cmd, c, "paul", "dogbark", "", clonePlacementPicker())
+		require.NoError(t, err)
+		require.Equal(t, "entire://aws-ap-southeast-2.entire.io/et/paul/dogbark", got)
+		// The fallback must disclose itself and the alternatives on stderr —
+		// never stdout, which `repo remote url` reserves for the URL alone.
+		require.Contains(t, errOut.String(), "using aws-ap-southeast-2.entire.io")
+		require.Contains(t, errOut.String(), "--cluster")
+		require.Contains(t, errOut.String(), "aws-us-east-2.entire.io")
 	})
 
 	t.Run("a mirror that is not ready or marked deleted is not a placement", func(t *testing.T) {
@@ -602,6 +609,42 @@ func TestResolveNativeCloneURL(t *testing.T) {
 		got, err := resolve(t, c, "")
 		require.NoError(t, err)
 		require.Equal(t, "entire://aws-ap-southeast-2.entire.io/et/paul/dogbark", got)
+	})
+}
+
+// TestSelectPlacement_NonInteractive locks the two non-interactive
+// multi-placement behaviors behind placementPicker.defaultHost: without a
+// canonical default the caller is told to pass --cluster (GitHub mirrors,
+// which never resolved without it), and with one (a native repo's home
+// cluster) resolution falls back to it and discloses the choice — and the
+// alternatives — on stderr. Runs under go test, where
+// interactive.CanPromptInteractively() is false by design.
+func TestSelectPlacement_NonInteractive(t *testing.T) {
+	t.Parallel()
+	placements := []coreapi.ResolvedPlacement{
+		{ClusterHost: "aws-ap-southeast-2.entire.io"},
+		{ClusterHost: "aws-us-east-2.entire.io"},
+	}
+
+	t.Run("no canonical default demands --cluster", func(t *testing.T) {
+		t.Parallel()
+		_, err := selectPlacement(newCloneTestCmd(), placements, "", clonePlacementPicker())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pass --cluster")
+	})
+
+	t.Run("a canonical default is used and disclosed", func(t *testing.T) {
+		t.Parallel()
+		cmd := newCloneTestCmd()
+		var errOut strings.Builder
+		cmd.SetErr(&errOut)
+		picker := clonePlacementPicker()
+		picker.defaultHost = "aws-ap-southeast-2.entire.io"
+		chosen, err := selectPlacement(cmd, placements, "", picker)
+		require.NoError(t, err)
+		require.Equal(t, "aws-ap-southeast-2.entire.io", chosen.ClusterHost)
+		require.Contains(t, errOut.String(), "using aws-ap-southeast-2.entire.io")
+		require.Contains(t, errOut.String(), "aws-us-east-2.entire.io")
 	})
 }
 
