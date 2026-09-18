@@ -146,10 +146,27 @@ the commands are always runnable in every build.
   add a separate one; non-interactively it repoints `--remote` directly. It
   serves both forges: for a native repo the placements are its primary plus each
   **ready** mirror. One URL per remote either way — a placement serves pushes as
-  well as fetches, so there is no split fetch/push remote to maintain. Both
-  `remote use` and `clone` choose a placement through the shared
-  `selectPlacement` picker, which matches on the cluster host the caller already
-  resolved and shows slugs, since that is what `--cluster` takes. `access list` shows who can pull a mirror (live
+  well as fetches, so there is no split fetch/push remote to maintain.
+  `remote url` is the read-only half of the same subtree: it resolves a repo to
+  its `entire://` URL and prints it, changing nothing.
+  `remote use`, `remote url` and `clone` all choose a placement through the shared
+  `selectPlacement` picker, each passing its own `placementPicker` wording. The
+  picker matches on the cluster host the caller already resolved and shows
+  slugs, since that is what `--cluster` takes. It renders on stderr when that is
+  a terminal and on the controlling
+  terminal otherwise (`openPlacementPromptTerminal`), because Bubble Tea fails
+  *silently* on a redirected writer — no window size, a 0x0 viewport, and stdin
+  still in raw mode — and `remote url` exists to have its stdout captured. The
+  cancellation message follows the same writer, so it is never explained into a
+  stream the user is not reading.
+  `remote url` is `clone` without the clone: it resolves the same three ref
+  shapes through the same `resolveRepoRemoteURL` and prints the `entire://` URL
+  to stdout for `git remote add entire "$(…)"`, so the two always accept the
+  same refs. It deliberately does **not** take the `resolveRepoRef` grammar the
+  rest of the group shares (no ULID, no `--project`) — a URL producer matches
+  its sibling `clone`, not `view`. Because it prints rather than execs, its
+  `entire://` passthrough is validated (`validateEntireURLForPrinting`) where
+  `clone`'s is forwarded verbatim. `access list` shows who can pull a mirror (live
   GitHub-admin gated). `edit --visibility` sets a native repo's visibility;
   `visibility get` reads it.
   **A repository is named `/<forge>/<a>/<b>` and no other way**, across the
@@ -255,7 +272,7 @@ and the inferred one is the common path.
 Experimental commands (gated by the build-time visibility flag above — visible
 and grouped under "Experimental commands:" in developer/nightly builds, hidden
 in stable releases, always runnable): `tokens`, `import`, `review`,
-`investigate`, `blame`, `why`, `experts`, `runner`, and `checkpoint policy`.
+`investigate`, `blame`, `why`, `experts`, and `runner`.
 `tokens` is also advertised through `entire labs`.
 
 Top-level lifecycle and standalone commands: `enable`, `disable`, `status`,

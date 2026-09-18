@@ -401,14 +401,16 @@ func resolveMirrorUseUpstream(ctx context.Context, dir, remote, arg string) (mir
 	return mirrorRepoRef{}, fmt.Errorf("cannot tell which repo to act on from the git remotes (tried %s); pass a repository reference explicitly (for example, /gh/owner/repo or /et/project/repo)", strings.Join(tried, ", "))
 }
 
-// newRepoRemoteCmd is the `entire repo remote` subtree: verbs that edit the
-// current clone's git remotes. `use` is the only one today.
+// newRepoRemoteCmd is the `entire repo remote` subtree: the git remote of an
+// Entire repository. `use` points the current clone at one; `url` only prints
+// one, for a caller assembling its own `git remote add`.
 func newRepoRemoteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remote",
-		Short: "Manage this clone's git remotes",
+		Short: "Work with an Entire repository's git remote",
 	}
 	cmd.AddCommand(newRepoRemoteUseCmd())
+	cmd.AddCommand(newRepoRemoteURLCmd())
 	return requireSubcommand(cmd)
 }
 
@@ -538,7 +540,7 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			}
 
 			chosen, err := selectPlacement(cmd, placements, clusterHost, clusterSlugByHost(clusters), placementPicker{
-				selector: "--cluster",
+				selector: clusterSelectorFlag,
 				title:    qualified + " is on more than one cluster — pick the one to use",
 				action:   "Remote update",
 			})
