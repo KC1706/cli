@@ -203,22 +203,46 @@ func TestNativeUsePlacements(t *testing.T) {
 	})
 }
 
-// TestNativeMirrorBeingDeletedHint pins the one server refusal the CLI adds to.
-// Every other one is rendered from the server's own detail, so this must not
-// fire on them.
-func TestNativeMirrorBeingDeletedHint(t *testing.T) {
+// TestRenderNativeMirrorCreateError pins the one server refusal the CLI adds
+// to. Every other one is rendered from the server's own detail, so this must
+// not fire on them.
+func TestRenderNativeMirrorCreateError(t *testing.T) {
 	t.Parallel()
 	other := &coreapi.ErrorModelStatusCode{StatusCode: 409, Response: coreapi.ErrorModel{
 		Detail: coreapi.NewOptString("repo is not active"),
 	}}
-	require.Equal(t, error(other), nativeMirrorBeingDeletedHint(other, "/et/acme/web", "aws-eu-central-1"))
+	got := renderNativeMirrorCreateError(other, "/et/acme/web", "aws-eu-central-1")
+	require.EqualError(t, got, "repo is not active")
+	require.NotContains(t, got.Error(), "torn down")
 
 	deleting := &coreapi.ErrorModelStatusCode{StatusCode: 409, Response: coreapi.ErrorModel{
 		Detail: coreapi.NewOptString("native mirror is being deleted"),
 	}}
-	got := nativeMirrorBeingDeletedHint(deleting, "/et/acme/web", "aws-eu-central-1")
+	got = renderNativeMirrorCreateError(deleting, "/et/acme/web", "aws-eu-central-1")
 	require.ErrorContains(t, got, "still being torn down")
 	require.ErrorContains(t, got, "entire repo mirror get /et/acme/web")
+}
+
+// TestCreateOneNativeMirror_RefusalReachesTheResult runs the refusal through
+// the caller rather than the helper, because the helper alone cannot show the
+// bug this replaces: the call site rendered the error first, and rendering
+// flattens the API error into a plain one, so the detail the hint matches on
+// was gone by the time it looked. The helper's own test passed throughout.
+func TestCreateOneNativeMirror_RefusalReachesTheResult(t *testing.T) {
+	t.Parallel()
+	c := newMirrorRequestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeCoreProblem(t, w, http.StatusConflict, "native mirror is being deleted")
+	})
+	target := mirrorTarget{
+		forge: nativeCloneForge, owner: "acme", repo: "web",
+		region:     regionChoice{slug: "aws-eu-central-1", jurisdiction: "eu", host: "aws-eu-central-1.entire.io"},
+		nativeRepo: nativeTestRepo(),
+	}
+	res := createOneNativeMirror(t.Context(), target, c, nil, mirrorAddOptions{noWait: true}, func(string, bool, bool) {})
+
+	require.Equal(t, mirrorStatusError, res.status)
+	require.ErrorContains(t, res.err, "still being torn down")
+	require.ErrorContains(t, res.err, "/et/acme/web")
 }
 
 // testMirrorClusterSlug is the cluster every wait-loop fixture places on; the

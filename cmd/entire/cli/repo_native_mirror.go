@@ -273,23 +273,29 @@ func awaitNativeMirrorRemoved(ctx context.Context, c *coreapi.Client, repoID, cl
 	}
 }
 
-// nativeMirrorBeingDeletedHint recognises the one server refusal whose fix is
-// not derivable from its own words: creating on a cluster whose previous
-// placement is still tearing down. The detail says the mirror is being deleted;
-// it does not say that waiting for the row to disappear is the whole remedy, so
-// a caller would retry immediately and see it again.
+// renderNativeMirrorCreateError renders a create refusal, recognising the one
+// whose fix is not derivable from its own words: creating on a cluster whose
+// previous placement is still tearing down. The detail says the mirror is being
+// deleted; it does not say that waiting for the row to disappear is the whole
+// remedy, so a caller would retry immediately and see it again.
 //
-// This is deliberately the ONLY message matched on. Every other refusal
+// That is deliberately the ONLY message matched on. Every other refusal
 // (hosting capability, registry state, trust publication, feature flags) is
 // rendered from the server's own problem+json detail by renderCoreError, which
 // keeps the CLI from encoding server prose it would then have to chase.
-func nativeMirrorBeingDeletedHint(err error, ref, clusterSlug string) error {
-	detail := coreapi.APIError(err)
-	if detail == "" || !strings.Contains(strings.ToLower(detail), "being deleted") {
-		return err
+//
+// It renders for itself rather than taking an already-rendered error because
+// the match needs the structured *coreapi.ErrorModelStatusCode, and
+// renderCoreError flattens that into a plain errors.New — so a caller that
+// rendered first would switch the hint off with nothing to show for it.
+func renderNativeMirrorCreateError(err error, ref, clusterSlug string) error {
+	detail := strings.ToLower(coreapi.APIError(err))
+	rendered := renderCoreError(err)
+	if !strings.Contains(detail, "being deleted") {
+		return rendered
 	}
 	return fmt.Errorf("%w; a previous mirror of %s on %s is still being torn down \u2014 wait for it to disappear from `entire repo mirror get %s`, then add it again",
-		err, ref, clusterSlug, ref)
+		rendered, ref, clusterSlug, ref)
 }
 
 // createOneNativeMirror is the native half of the parallel engine
@@ -320,7 +326,7 @@ func createOneNativeMirror(ctx context.Context, t mirrorTarget, c *coreapi.Clien
 		coreapi.CreateNativeMirrorParams{RepoId: t.nativeRepo.ID})
 	if err != nil {
 		res.status = mirrorStatusError
-		res.err = nativeMirrorBeingDeletedHint(renderCoreError(err), t.ref(), t.region.slug)
+		res.err = renderNativeMirrorCreateError(err, t.ref(), t.region.slug)
 		report(mirrorStatusError, true, false)
 		return res
 	}
