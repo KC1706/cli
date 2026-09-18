@@ -183,6 +183,17 @@ func regionBySlug(regions []regionChoice, slug string) (regionChoice, bool) {
 	return regionChoice{}, false
 }
 
+// regionByHost is the same lookup keyed on the public host, which is what
+// --cluster takes. DNS is case-insensitive, so the match folds case.
+func regionByHost(regions []regionChoice, host string) (regionChoice, bool) {
+	for _, r := range regions {
+		if strings.EqualFold(r.host, host) {
+			return r, true
+		}
+	}
+	return regionChoice{}, false
+}
+
 // nativeEligibleRegions narrows the catalog to the clusters a native repo may
 // be mirrored into: v1 places a replica cross-jurisdiction, so the repo's own
 // region is not on offer. Offering it would only produce a choice that

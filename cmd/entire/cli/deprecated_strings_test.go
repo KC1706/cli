@@ -44,11 +44,7 @@ func TestNoDeprecatedCommandFormsInUserFacingStrings(t *testing.T) {
 		"entire grant project", // → entire project grant
 		"entire grant repo",    // → entire repo grant
 		// A repo's home cluster is its owning project's region, so there is
-		// nothing for a caller to choose. (That --cluster now takes a catalog
-		// slug rather than a public host is not expressible as a banned
-		// substring — every correct example starts "--cluster aws-" too — so
-		// that contract is pinned per command instead, by the flag tests in
-		// repo_clone_test.go, repo_mirror_test.go and repo_remote_test.go.)
+		// nothing for a caller to choose.
 		"--cluster-host", // → removed; the owning project's region decides
 	}
 

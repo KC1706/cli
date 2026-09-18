@@ -100,24 +100,15 @@ func TestRepoRemoteURL_Mirror(t *testing.T) {
 	}{
 		{"single", []string{"aws-us-east-2.entire.io"}, "", "entire://aws-us-east-2.entire.io/gh/owner/repo\n", ""},
 		{"multiple", []string{"aws-us-east-2.entire.io", "eu-west-1.entire.io"}, "", "", "pass --cluster"},
-		// --cluster names the catalog slug; the host it resolves to is what the
-		// command dials and what lands in the URL.
-		{"explicit cluster", []string{"aws-us-east-2.entire.io", "eu-west-1.entire.io"}, "eu-west-1", "entire://eu-west-1.entire.io/gh/owner/repo\n", ""},
+		// --cluster names the cluster host, which is both what the command dials
+		// and what lands in the URL.
+		{"explicit cluster", []string{"aws-us-east-2.entire.io", "eu-west-1.entire.io"}, "eu-west-1.entire.io", "entire://eu-west-1.entire.io/gh/owner/repo\n", ""},
 		{"none", nil, "", "", "no mirror found"},
 		{"invalid host", []string{"example.com@evil.com"}, "", "", "invalid cluster host"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				// --cluster is a catalog slug, so resolving one costs a
-				// GET /clusters before the placement lookup.
-				if r.URL.Path == testClustersPath {
-					assert.NoError(t, printJSON(w, &coreapi.ListClustersOutputBody{Clusters: []coreapi.Cluster{
-						{Slug: "aws-us-east-2", PublicUrl: "https://aws-us-east-2.entire.io"},
-						{Slug: "eu-west-1", PublicUrl: "https://eu-west-1.entire.io"},
-					}}))
-					return
-				}
 				assert.Equal(t, "/api/v1/mirrors/placements", r.URL.Path)
 				placements := make([]coreapi.ResolvedPlacement, 0, len(tc.hosts))
 				for _, host := range tc.hosts {
@@ -130,7 +121,7 @@ func TestRepoRemoteURL_Mirror(t *testing.T) {
 			if tc.cluster != "" {
 				prev := clusterCoreClient
 				clusterCoreClient = func(_ context.Context, host string) (*coreapi.Client, error) {
-					require.Equal(t, tc.cluster+".entire.io", host, "the slug is resolved to its catalog host before dialling")
+					require.Equal(t, tc.cluster, host, "--cluster is the host dialled")
 					return coreapi.NewWithBearer(srv.URL, "tok")
 				}
 				t.Cleanup(func() { clusterCoreClient = prev })

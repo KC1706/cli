@@ -13,14 +13,12 @@ import (
 
 // clusterColumns is the human table view of a cluster. Every column is a value
 // some other command takes, which is what the table is for: REGION is the
-// jurisdiction slug `org create` and `project create` name with --region, and
-// CLUSTER is the slug every --cluster takes (`repo mirror add`, `repo mirror
-// remove`, `repo mirror list`, `repo access list`). HOST is the public host
-// those commands resolve that slug to — the host in an entire:// clone URL,
-// and the coordinate the CLI dials; it is shown because a user reading a clone
-// URL needs to recognise which row it belongs to, not because anything asks
-// them to type it. The catalog's apiUrl is --json only: the CLI dials the API
-// URL itself.
+// jurisdiction slug `org create` and `project create` name with --region,
+// CLUSTER is the placement slug `repo mirror list --cluster` filters on, and
+// HOST is what every targeting --cluster takes (`repo mirror add`, `repo mirror
+// remove`, `repo access list`, `repo clone`, `repo remote use`) as well as the
+// host in an entire:// clone URL. The catalog's apiUrl is --json only: the CLI
+// dials the API URL itself.
 var clusterColumns = []string{colHeaderRegion, colHeaderCluster, "HOST"}
 
 func clusterRow(cl coreapi.Cluster) []string {
@@ -54,8 +52,8 @@ func clusterTable(clusters []coreapi.Cluster) ([]string, func(coreapi.Cluster) [
 
 // clusterJSON is the --json view of the catalog: the wire model with a
 // synthesized `host` merged into each cluster — the same validated bare host
-// the table's HOST column shows, which is what the slug in `slug` resolves to
-// — so a script reads the safe value instead of re-implementing
+// the table's HOST column shows and that every targeting `--cluster` takes —
+// so a script reads the safe value instead of re-implementing
 // hostFromPublicURL over publicUrl. Where
 // publicUrl fails validation the field is absent, not dashed: publicUrl stays
 // for the consumer that wants the raw value, and an absent host says

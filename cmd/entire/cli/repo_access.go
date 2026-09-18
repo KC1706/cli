@@ -55,12 +55,12 @@ func newRepoAccessListCmd() *cobra.Command {
 		Use:   cmdListRepo,
 		Short: "List the users with access to a mirror (live GitHub-admin gated)",
 		Long: "Lists the principals that can pull the mirror of <repo> on " +
-			"the cluster named by --cluster (default " + defaultClusterSlug + "), " +
+			"the cluster named by --cluster (default " + defaultClusterHost + "), " +
 			"with their reader/writer role resolved from the control plane. The " +
 			"caller must be a live GitHub admin of the upstream (org repo) or its " +
 			"owner (user repo).\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo access list /gh/acme/widget\n" +
-			"  entire repo access list /gh/acme/widget --cluster aws-eu-central-1",
+			"  entire repo access list /gh/acme/widget --cluster aws-eu-central-1.entire.io",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target, err := parseMirrorRepoRef(args[0], mirrorCloneForge)
@@ -76,17 +76,8 @@ func newRepoAccessListCmd() *cobra.Command {
 				return err
 			}
 			owner, repo := target.owner, target.repo
-			// The catalog fetch and the slug lookup are separated so a failed
-			// round trip is not reported as a bad flag value — --cluster has a
-			// default, so a user who never passed it would be told theirs was
-			// invalid.
-			clusters, err := fetchClusterCatalog(cmd)
-			if err != nil {
-				cmd.SilenceUsage = true
-				return err
-			}
-			clusterHost, err := hostForClusterSlug(clusters, cluster)
-			if err != nil {
+			clusterHost := cluster
+			if err := validateClusterHost(clusterHost); err != nil {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid --cluster: %w", err)
 			}
@@ -104,7 +95,7 @@ func newRepoAccessListCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&cluster, "cluster", defaultClusterSlug, "Cluster slug the mirror is on, as `entire cluster list` prints it")
+	cmd.Flags().StringVar(&cluster, "cluster", defaultClusterHost, "Cluster host the mirror is on")
 	addJSONFlag(cmd)
 	return cmd
 }

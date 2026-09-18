@@ -502,6 +502,21 @@ func filterByName[T any](items []T, nameOf func(T) string, substr string) []T {
 	return out
 }
 
+// defaultClusterHost is the cluster a mirror command targets when --cluster is
+// omitted and there is no terminal to offer a picker on: `access list` defaults
+// its flag to it outright, and `mirror add` falls back to it for a
+// non-interactive run, so scripts keep a stable, offline-resolvable default.
+//
+// `mirror remove` deliberately has no default. Which clusters a repo is on is a
+// property of the repo rather than of the catalog, and removing is destructive,
+// so guessing would tear down a copy the caller never named (see
+// chooseMirrorRemoveRegions).
+//
+// Interactive runs never reach this: they enumerate the real catalog (GET
+// /api/v1/clusters via availableRegions) and pick from it — chooseMirrorAddRegions
+// → pickRegions for add, chooseMirrorRemoveRegions → pickRemoveRegions for remove.
+const defaultClusterHost = "aws-us-east-2.entire.io"
+
 // clusterHostLabelRe matches one DNS label: alphanumeric, internal hyphens
 // allowed, no leading/trailing hyphen.
 var clusterHostLabelRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$`)
@@ -570,13 +585,13 @@ func newRepoMirrorAddCmd() *cobra.Command {
 			"mirror, pick one or more regions, then creates every (repo, region) " +
 			"mirror in parallel and prints the clone URLs. --cluster requires a <repo>.\n\n" +
 			"With a <repo>, places it on every cluster named by --cluster — repeat " +
-			"the flag or comma-separate the slugs — in parallel, then waits for " +
+			"the flag or comma-separate the hosts — in parallel, then waits for " +
 			"each to become usable. Pass --no-wait to return as soon as the " +
 			"placements are registered. Idempotent on (repo, cluster), so naming a " +
 			"cluster the repo is already on reports it rather than failing.\n\n" +
 			"When --cluster is omitted, an interactive terminal offers the " +
 			"available clusters as a multi-select; non-interactive runs default to " +
-			defaultClusterSlug + ".\n\n" +
+			defaultClusterHost + ".\n\n" +
 			"With an /et/ ref, places replicas of an Entire-native repo and waits " +
 			"for each to be seeded. A native mirror goes in a region other than the " +
 			"repo's own, so only those clusters are offered and --cluster has no " +
@@ -585,9 +600,9 @@ func newRepoMirrorAddCmd() *cobra.Command {
 			"and the command exits non-zero naming the ones that did.\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo mirror add\n" +
 			"  entire repo mirror add /gh/octocat/hello-world\n" +
-			"  entire repo mirror add /gh/octocat/hello-world --cluster aws-us-east-2\n" +
-			"  entire repo mirror add /gh/octocat/hello-world --cluster aws-us-east-2,aws-eu-central-1\n" +
-			"  entire repo mirror add /et/acme/web --cluster aws-eu-central-1",
+			"  entire repo mirror add /gh/octocat/hello-world --cluster aws-us-east-2.entire.io\n" +
+			"  entire repo mirror add /gh/octocat/hello-world --cluster aws-us-east-2.entire.io,aws-eu-central-1.entire.io\n" +
+			"  entire repo mirror add /et/acme/web --cluster aws-eu-central-1.entire.io",
 		Args: cobra.MaximumNArgs(1),
 		PreRunE: func(_ *cobra.Command, _ []string) error {
 			// Preserve zero as an unbounded wait for existing callers.
@@ -600,14 +615,14 @@ func newRepoMirrorAddCmd() *cobra.Command {
 			if len(args) == 0 {
 				if cmd.Flags().Changed("cluster") {
 					cmd.SilenceUsage = true
-					return errors.New("--cluster requires <repo>; for example: entire repo mirror add /gh/owner/repo --cluster aws-us-east-2")
+					return errors.New("--cluster requires <repo>; for example: entire repo mirror add /gh/owner/repo --cluster aws-us-east-2.entire.io")
 				}
 				return runMirrorAddWizard(cmd, opts)
 			}
 			return runMirrorAdd(cmd, args[0], clusters, opts)
 		},
 	}
-	cmd.Flags().StringSliceVar(&clusters, "cluster", nil, "Cluster slug(s) to mirror onto, as `entire cluster list` prints them; repeat or comma-separate for several (a terminal offers a multi-select when omitted; other runs use "+defaultClusterSlug+")")
+	cmd.Flags().StringSliceVar(&clusters, "cluster", nil, "Cluster host(s) to mirror onto; repeat or comma-separate for several (a terminal offers a multi-select when omitted; other runs use "+defaultClusterHost+")")
 	cmd.Flags().BoolVar(&opts.noWait, "no-wait", false, "Return once the placement is registered, without waiting for the initial clone")
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", 30*time.Minute, "How long to wait for mirror request submission, placement, and clone readiness (0 waits indefinitely)")
 	return cmd
@@ -619,16 +634,17 @@ func newRepoMirrorAddCmd() *cobra.Command {
 // wizard uses — so one repo across three clusters gets the same live progress
 // and summary table as three repos across three clusters.
 //
-// --cluster names catalog SLUGS; the host each resolves to is the coordinate
-// runCoreForCluster and the clone URL need, and the user never types it.
-func runMirrorAdd(cmd *cobra.Command, repoRef string, clusterSlugs []string, opts mirrorAddOptions) error {
+// --cluster names cluster HOSTS, the coordinate runCoreForCluster and the clone
+// URL already work in. The catalog maps each to the slug the native-mirror API
+// is keyed by, so the two forges take one spelling from the user.
+func runMirrorAdd(cmd *cobra.Command, repoRef string, clusterHosts []string, opts mirrorAddOptions) error {
 	cmd.SilenceUsage = true
 	ref, err := parseMirrorRepoRef(repoRef)
 	if err != nil {
 		return err
 	}
-	for _, slug := range clusterSlugs {
-		if err := validateClusterSlug(slug); err != nil {
+	for _, host := range clusterHosts {
+		if err := validateClusterHost(host); err != nil {
 			return fmt.Errorf("invalid --cluster: %w", err)
 		}
 	}
@@ -658,7 +674,7 @@ func runMirrorAdd(cmd *cobra.Command, repoRef string, clusterSlugs []string, opt
 		return err
 	}
 
-	chosen, err := chooseMirrorAddRegions(cmd, ref, nativeRepo, clusters, regions, clusterSlugs)
+	chosen, err := chooseMirrorAddRegions(cmd, ref, nativeRepo, clusters, regions, clusterHosts)
 	if err != nil {
 		return err
 	}
@@ -675,20 +691,24 @@ func runMirrorAdd(cmd *cobra.Command, repoRef string, clusterSlugs []string, opt
 // clusters a one-shot add will place on, refusing anything the CLI can rule out
 // before a write.
 //
-// Named slugs are checked individually so a batch cannot half-apply on a
+// Named clusters are checked individually so a batch cannot half-apply on a
 // mistake: all of them must be placeable, or none is attempted.
-func chooseMirrorAddRegions(cmd *cobra.Command, ref mirrorRepoRef, nativeRepo *coreapi.Repo, clusters []coreapi.Cluster, regions []regionChoice, slugs []string) ([]regionChoice, error) {
+//
+// A host is resolved against the catalog rather than passed through, because
+// the native API is keyed by slug — a cluster the catalog does not list has no
+// slug to place on, so it cannot be a target for either forge.
+func chooseMirrorAddRegions(cmd *cobra.Command, ref mirrorRepoRef, nativeRepo *coreapi.Repo, clusters []coreapi.Cluster, regions []regionChoice, hosts []string) ([]regionChoice, error) {
 	eligible := regions
 	if ref.forge == nativeCloneForge {
 		eligible = nativeEligibleRegions(regions, nativeRepo)
 	}
-	if len(slugs) > 0 {
-		chosen := make([]regionChoice, 0, len(slugs))
+	if len(hosts) > 0 {
+		chosen := make([]regionChoice, 0, len(hosts))
 		seen := map[string]bool{}
-		for _, slug := range slugs {
-			region, ok := regionBySlug(regions, slug)
+		for _, host := range hosts {
+			region, ok := regionByHost(regions, host)
 			if !ok {
-				return nil, fmt.Errorf("invalid --cluster: unknown cluster %q; available: %s", slug, strings.Join(regionSlugs(regions), ", "))
+				return nil, fmt.Errorf("invalid --cluster: unknown cluster %q; available: %s", host, strings.Join(regionHosts(regions), ", "))
 			}
 			if ref.forge == nativeCloneForge {
 				if err := checkNativeMirrorTarget(nativeRepo, clusters, region.slug, nativeRefOf(ref)); err != nil {
@@ -712,11 +732,11 @@ func chooseMirrorAddRegions(cmd *cobra.Command, ref mirrorRepoRef, nativeRepo *c
 		// safe fixed default; GitHub mirrors keep one so scripts are stable.
 		if ref.forge == nativeCloneForge {
 			return nil, fmt.Errorf("pass --cluster to say where to mirror %s: a native mirror goes in a region other than the repo's own, so there is no safe default (available: %s)",
-				ref.qualified(), strings.Join(regionSlugs(eligible), ", "))
+				ref.qualified(), strings.Join(regionHosts(eligible), ", "))
 		}
-		region, ok := regionBySlug(regions, defaultClusterSlug)
+		region, ok := regionByHost(regions, defaultClusterHost)
 		if !ok {
-			return nil, fmt.Errorf("default cluster %s is not in the control plane's catalog; pass --cluster explicitly (available: %s)", defaultClusterSlug, strings.Join(regionSlugs(regions), ", "))
+			return nil, fmt.Errorf("default cluster %s is not in the control plane's catalog; pass --cluster explicitly (available: %s)", defaultClusterHost, strings.Join(regionHosts(regions), ", "))
 		}
 		return []regionChoice{region}, nil
 	}
@@ -1110,11 +1130,6 @@ func newRepoMirrorListCmd() *cobra.Command {
 			if err := validatePageSize(cmd, pageSize); err != nil {
 				return err
 			}
-			if cluster != "" {
-				if err := validateClusterSlug(cluster); err != nil {
-					return fmt.Errorf("invalid --cluster: %w", err)
-				}
-			}
 			if !slices.Contains([]string{mirrorCloneForge, nativeCloneForge, forgeFilterAll}, forge) {
 				return fmt.Errorf("invalid --forge %q: must be %s, %s, or %s", forge, mirrorCloneForge, nativeCloneForge, forgeFilterAll)
 			}
@@ -1141,7 +1156,7 @@ func newRepoMirrorListCmd() *cobra.Command {
 	// client-side caveat renders once, as the group's note (see the
 	// useGroupedFlagHelp call below), not on each flag. A flag that gains a
 	// server-side implementation must leave the group.
-	cmd.Flags().StringVar(&cluster, "cluster", "", "Keep only repos mirrored on this cluster, by slug as `entire cluster list` prints it (drops onboardable candidates)")
+	cmd.Flags().StringVar(&cluster, "cluster", "", "Keep only repos mirrored on this cluster, by slug or public host (drops onboardable candidates)")
 	cmd.Flags().StringVar(&owner, "owner", "", "Filter by upstream owner login")
 	cmd.Flags().StringVar(&name, "name", "", "Filter by substring of the NAME column, e.g. acme/web or /gh/acme (case-insensitive)")
 	cmd.Flags().StringVar(&status, "status", "", "Filter by exact STATUS (mirrors: ready/processing/failed/suspended, matching any of a repo's placements; candidates: available/owner-only)")
@@ -1483,8 +1498,8 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 			"dropping that is `entire repo delete`. Native teardown is " +
 			"asynchronous, so the command waits for each placement to disappear.\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo mirror remove /gh/octocat/hello-world\n" +
-			"  entire repo mirror remove /gh/octocat/hello-world --cluster aws-eu-central-1\n" +
-			"  entire repo mirror remove /et/acme/web --cluster aws-eu-central-1,aws-ap-south-1",
+			"  entire repo mirror remove /gh/octocat/hello-world --cluster aws-eu-central-1.entire.io\n" +
+			"  entire repo mirror remove /et/acme/web --cluster aws-eu-central-1.entire.io,aws-ap-south-1.entire.io",
 		Args: cobra.ExactArgs(1),
 		PreRunE: func(_ *cobra.Command, _ []string) error {
 			// Zero is an unbounded wait, matching `add`.
@@ -1497,7 +1512,7 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 			return runMirrorRemove(cmd, args[0], clusters, timeout)
 		},
 	}
-	cmd.Flags().StringSliceVar(&clusters, "cluster", nil, "Cluster slug(s) to remove the mirror from, as `entire cluster list` prints them; repeat or comma-separate for several (a terminal offers a multi-select when omitted)")
+	cmd.Flags().StringSliceVar(&clusters, "cluster", nil, "Cluster host(s) to remove the mirror from; repeat or comma-separate for several (a terminal offers a multi-select when omitted)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "How long to wait for each placement to be torn down (0 waits indefinitely)")
 	return cmd
 }

@@ -471,20 +471,20 @@ func TestRepoMirrorAdd_AsyncDefaultWhenSettingsFail(t *testing.T) {
 	previousClient := clusterCoreClient
 	clusterCoreClient = func(context.Context, string) (*coreapi.Client, error) { return client, nil }
 	t.Cleanup(func() { clusterCoreClient = previousClient })
-	// --cluster names a catalog slug, so the command resolves it against the
-	// active context's catalog before dialling the cluster's own core.
+	// --cluster names a cluster host; the catalog is still read, because the
+	// native-mirror API is keyed by slug and one lookup serves both forges.
 	serveClusters(t, testClusterCatalog)
 
 	cmd := newRepoCmd()
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"mirror", "add", "--no-wait", "--cluster", defaultClusterSlug, "/gh/owner/repo"})
+	cmd.SetArgs([]string{"mirror", "add", "--no-wait", "--cluster", defaultClusterHost, "/gh/owner/repo"})
 	require.NoError(t, cmd.ExecuteContext(t.Context()))
 	// A one-shot add reports through the same summary table as the wizard, so
 	// one repo on three clusters reads like three repos on three clusters.
 	require.Contains(t, stdout.String(), "/gh/owner/repo")
-	require.Contains(t, stdout.String(), defaultClusterSlug)
+	require.Contains(t, stdout.String(), "aws-us-east-2")
 	require.Contains(t, stdout.String(), mirrorStatusRegistered)
 	require.Contains(t, stdout.String(), "entire://cluster/gh/owner/repo")
 	require.NotContains(t, stdout.String(), mirrorStatusReady, "--no-wait does not wait for the clone")

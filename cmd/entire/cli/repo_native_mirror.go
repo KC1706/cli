@@ -387,6 +387,19 @@ func regionSlugs(regions []regionChoice) []string {
 	return out
 }
 
+// regionHosts is the same list in the spelling --cluster takes, for the
+// "available: ..." half of a refusal — a reader must be able to paste one back.
+func regionHosts(regions []regionChoice) []string {
+	out := make([]string, 0, len(regions))
+	for _, r := range regions {
+		if r.host != "" {
+			out = append(out, r.host)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // runNativeMirrorGet is `repo mirror get /et/<project>/<repo>`: the repo's
 // identity, then every cluster holding a copy of it.
 //

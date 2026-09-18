@@ -787,20 +787,6 @@ func TestRepoMirrorList_FilterSort(t *testing.T) {
 		require.NotContains(t, stdout, "acme/mkt", "candidates are cluster-agnostic and dropped by --cluster")
 	})
 
-	t.Run("--cluster names the cluster by slug and refuses a public host", func(t *testing.T) {
-		// A cluster is named one way across the whole CLI, by the slug the
-		// CLUSTERS column and `entire cluster list` print. The host form appears
-		// inside the clone URLs this command also prints, so it is the plausible
-		// mistake — and it fails outright rather than quietly matching nothing.
-		cmd := newRepoMirrorListCmd()
-		cmd.SetOut(&bytes.Buffer{})
-		cmd.SetErr(&bytes.Buffer{})
-		cmd.SetArgs([]string{"--cluster", "aws-us-east-2.entire.io"})
-		err := cmd.ExecuteContext(t.Context())
-		require.ErrorContains(t, err, "invalid --cluster")
-		require.ErrorContains(t, err, "is not a cluster slug")
-	})
-
 	t.Run("--status filters by exact status across both row types", func(t *testing.T) {
 		mixed := func() []coreapi.RepoIndexEntry {
 			return []coreapi.RepoIndexEntry{
@@ -1622,34 +1608,34 @@ func TestChooseMirrorAddRegions_NonInteractive(t *testing.T) {
 	t.Parallel()
 	clusters := []coreapi.Cluster{
 		{Slug: "aws-eu-central-1", Jurisdiction: "eu", PublicUrl: "https://aws-eu-central-1.entire.io"},
-		{Slug: defaultClusterSlug, Jurisdiction: "us", PublicUrl: "https://aws-us-east-2.entire.io"},
+		{Slug: "aws-us-east-2", Jurisdiction: "us", PublicUrl: "https://" + defaultClusterHost},
 	}
 	regions := clustersToRegions(clusters)
 	ghRef := mirrorRepoRef{forge: mirrorCloneForge, owner: "acme", repo: "web"}
 	nativeRef := mirrorRepoRef{forge: nativeCloneForge, owner: "acme", repo: "web"}
 
-	t.Run("github falls back to the default slug", func(t *testing.T) {
+	t.Run("github falls back to the default cluster", func(t *testing.T) {
 		t.Parallel()
 		got, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, clusters, regions, nil)
 		require.NoError(t, err)
 		require.Len(t, got, 1)
-		require.Equal(t, defaultClusterSlug, got[0].slug)
+		require.Equal(t, defaultClusterHost, got[0].host)
 	})
 
 	t.Run("a default absent from the catalog errors naming the available clusters", func(t *testing.T) {
 		t.Parallel()
 		only := clusters[:1]
 		_, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, only, clustersToRegions(only), nil)
-		require.ErrorContains(t, err, defaultClusterSlug)
+		require.ErrorContains(t, err, defaultClusterHost)
 		require.ErrorContains(t, err, "aws-eu-central-1")
 	})
 
 	t.Run("several named clusters all resolve", func(t *testing.T) {
 		t.Parallel()
 		got, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, clusters, regions,
-			[]string{"aws-eu-central-1", defaultClusterSlug})
+			[]string{"aws-eu-central-1.entire.io", defaultClusterHost})
 		require.NoError(t, err)
-		require.Equal(t, []string{"aws-eu-central-1", defaultClusterSlug}, regionSlugs(got))
+		require.Equal(t, []string{"aws-eu-central-1", "aws-us-east-2"}, regionSlugs(got))
 	})
 
 	// Naming a cluster twice asks for one placement, not two — the create is
@@ -1657,16 +1643,16 @@ func TestChooseMirrorAddRegions_NonInteractive(t *testing.T) {
 	t.Run("a repeated cluster collapses", func(t *testing.T) {
 		t.Parallel()
 		got, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, clusters, regions,
-			[]string{"aws-eu-central-1", "AWS-EU-CENTRAL-1"})
+			[]string{"aws-eu-central-1.entire.io", "AWS-EU-CENTRAL-1.ENTIRE.IO"})
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 	})
 
-	// A batch must not half-apply on a mistake: one bad slug refuses the lot.
+	// A batch must not half-apply on a mistake: one bad cluster refuses the lot.
 	t.Run("an unknown cluster refuses the whole batch", func(t *testing.T) {
 		t.Parallel()
 		_, err := chooseMirrorAddRegions(&cobra.Command{}, ghRef, nil, clusters, regions,
-			[]string{"aws-eu-central-1", "nope"})
+			[]string{"aws-eu-central-1.entire.io", "nope.entire.io"})
 		require.ErrorContains(t, err, "unknown cluster")
 	})
 
@@ -1675,7 +1661,7 @@ func TestChooseMirrorAddRegions_NonInteractive(t *testing.T) {
 		_, err := chooseMirrorAddRegions(&cobra.Command{}, nativeRef, nativeTestRepo(), clusters, regions, nil)
 		require.ErrorContains(t, err, "pass --cluster")
 		require.ErrorContains(t, err, "aws-eu-central-1", "it names the regions that ARE eligible")
-		require.NotContains(t, err.Error(), defaultClusterSlug, "the repo's own region is not one of them")
+		require.NotContains(t, err.Error(), defaultClusterHost, "the repo's own region is not one of them")
 	})
 }
 
@@ -2095,7 +2081,7 @@ func seamClusterCoreClient(t *testing.T, client *coreapi.Client) {
 // default, so a test that passed a host through unchanged would fail.
 var testClusterCatalog = []coreapi.Cluster{
 	{Slug: "eu", PublicUrl: "https://eu.example"},
-	{Slug: defaultClusterSlug, PublicUrl: "https://aws-us-east-2.entire.io"},
+	{Slug: "aws-us-east-2", PublicUrl: "https://" + defaultClusterHost},
 }
 
 // serveRemovePlacements stands up the active-context half of `mirror remove`:
@@ -2166,8 +2152,8 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 		return out.String(), err
 	}
 
-	t.Run("--cluster names the cluster by slug", func(t *testing.T) {
-		stdout, err := run("/gh/o/r", "--cluster", "eu")
+	t.Run("--cluster names the cluster by host", func(t *testing.T) {
+		stdout, err := run("/gh/o/r", "--cluster", "eu.example")
 		require.NoError(t, err)
 		require.Equal(t, []string{"eu.example"}, deleted)
 		require.Contains(t, stdout, "/gh/o/r")
@@ -2175,12 +2161,12 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 	})
 
 	// The whole point of accepting several: one invocation, one summary. The
-	// second cluster is also the unlisted one, so this pins that a slug the
+	// second cluster is also the unlisted one, so this pins that a cluster the
 	// caller named explicitly reaches the server even when the pull-gated
 	// resolver did not report it — otherwise the placement most worth tearing
 	// down (failed, suspended, unpullable) would be unreachable.
 	t.Run("several clusters are removed in one run, listed or not", func(t *testing.T) {
-		_, err := run("/gh/o/r", "--cluster", "eu,aws-us-east-2")
+		_, err := run("/gh/o/r", "--cluster", "eu.example,"+defaultClusterHost)
 		require.NoError(t, err)
 		require.ElementsMatch(t, []string{"eu.example", "aws-us-east-2.entire.io"}, deleted)
 	})
@@ -2189,35 +2175,29 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 	t.Run("omitting --cluster refuses and names where the repo is", func(t *testing.T) {
 		_, err := run("/gh/o/r")
 		require.ErrorContains(t, err, "pass --cluster")
-		require.ErrorContains(t, err, "eu")
+		require.ErrorContains(t, err, "eu.example")
 		require.Empty(t, deleted)
 	})
 
-	t.Run("a host is not a cluster slug", func(t *testing.T) {
-		_, err := run("/gh/o/r", "--cluster", "eu.example")
-		require.ErrorContains(t, err, "not a cluster slug")
-		require.Empty(t, deleted)
-	})
-
-	// A slug in neither the listing nor the catalog is a typo, and the answer
-	// names where the repo actually is.
+	// A cluster in neither the listing nor the catalog is a typo, and the
+	// answer names where the repo actually is.
 	t.Run("a cluster that exists nowhere names where the repo is", func(t *testing.T) {
-		_, err := run("/gh/o/r", "--cluster", "nope")
+		_, err := run("/gh/o/r", "--cluster", "nope.example")
 		require.ErrorContains(t, err, "unknown cluster")
-		require.ErrorContains(t, err, "eu")
+		require.ErrorContains(t, err, "eu.example")
 		require.Empty(t, deleted)
 	})
 
 	t.Run("a second positional is refused before any request", func(t *testing.T) {
-		_, err := run("/gh/o/r", "eu")
+		_, err := run("/gh/o/r", "eu.example")
 		require.ErrorContains(t, err, "accepts 1 arg(s)")
 		require.Empty(t, deleted)
 	})
 }
 
 // TestRepoAccessList_ClusterFlag pins that `repo access list` names the
-// placement with --cluster as a catalog slug, resolving it to the host it
-// dials, defaulting to the default slug, and refusing a second positional.
+// placement with --cluster as a cluster host, defaulting to defaultClusterHost,
+// and refusing a second positional.
 //
 // Not parallel: swaps the package-level activeCoreClient and clusterCoreClient
 // seams.
@@ -2245,8 +2225,8 @@ func TestRepoAccessList_ClusterFlag(t *testing.T) {
 		return out.String(), err
 	}
 
-	t.Run("--cluster names the placement by slug", func(t *testing.T) {
-		stdout, err := run("/gh/o/r", "--cluster", "eu")
+	t.Run("--cluster names the placement by host", func(t *testing.T) {
+		stdout, err := run("/gh/o/r", "--cluster", "eu.example")
 		require.NoError(t, err)
 		require.Contains(t, stdout, "alice")
 		require.Equal(t, []string{"eu.example"}, listed)
@@ -2258,14 +2238,17 @@ func TestRepoAccessList_ClusterFlag(t *testing.T) {
 		require.Equal(t, []string{"aws-us-east-2.entire.io"}, listed)
 	})
 
-	t.Run("an unknown slug fails before any request", func(t *testing.T) {
-		_, err := run("/gh/o/r", "--cluster", "nope")
-		require.ErrorContains(t, err, "unknown cluster")
+	// The host is passed through to the cluster's own core rather than checked
+	// against the catalog, so an unknown one is the server's 404 to give. What
+	// must still fail locally is a host that is not a host.
+	t.Run("a malformed cluster fails before any request", func(t *testing.T) {
+		_, err := run("/gh/o/r", "--cluster", "eu.example@evil.com")
+		require.ErrorContains(t, err, "invalid --cluster")
 		require.Empty(t, listed)
 	})
 
 	t.Run("a second positional is refused before any request", func(t *testing.T) {
-		_, err := run("/gh/o/r", "eu")
+		_, err := run("/gh/o/r", "eu.example")
 		require.ErrorContains(t, err, "accepts 1 arg(s)")
 		require.Empty(t, listed)
 	})

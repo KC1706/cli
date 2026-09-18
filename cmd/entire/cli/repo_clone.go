@@ -398,7 +398,7 @@ func newRepoCloneCmd() *cobra.Command {
 		Example: "  entire repo clone /et/project/example\n" +
 			"  entire repo clone /gh/entirehq/entire-api\n" +
 			"  entire repo clone /gh/entirehq/entire-api ./entire-api\n" +
-			"  entire repo clone /gh/entirehq/entire-api --cluster aws-us-east-2\n" +
+			"  entire repo clone /gh/entirehq/entire-api --cluster aws-us-east-2.entire.io\n" +
 			"  entire repo clone entire://aws-us-east-2.entire.io/gh/entirehq/entire-api",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -416,7 +416,7 @@ func newRepoCloneCmd() *cobra.Command {
 			return runGitClone(cmd.Context(), cmd, cloneURL, targetDir)
 		},
 	}
-	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster slug to clone from when the repo is mirrored on more than one, as `entire cluster list` prints it")
+	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster host to clone from when the repo is mirrored on more than one (may belong to another auth context)")
 	return cmd
 }
 
@@ -499,39 +499,21 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 		placements = ps
 		return nil
 	}
-	// Shape-check --cluster before anything is dialled, so a malformed value
-	// fails locally rather than after a round trip.
-	if cluster != "" {
-		if err := validateClusterSlug(cluster); err != nil {
-			return "", fmt.Errorf("invalid --cluster: %w", err)
-		}
-	}
-
-	// The catalog is what turns the slug the user types into the host
-	// everything downstream needs, and back again for the picker's labels, so
-	// it is fetched once here from the active context.
-	clusters, err := fetchClusterCatalog(cmd)
-	if err != nil {
-		return "", err
-	}
-
-	// With an explicit --cluster, dial the core fronting that cluster rather
-	// than the active context's — discovered from its well-known and
+	// An explicit --cluster may name a cluster in a different federation
+	// than the active context, whose mirrors the active-context core can't
+	// see (the original bug: cloning a royalcanin.partial.to mirror while a
+	// different context is active failed with "not mirrored on ..."). Dial
+	// the core fronting that cluster — discovered from its well-known and
 	// authenticated with the matching local context, the same path
-	// `mirror add <repo> --cluster <slug>` uses. With no --cluster, list from
-	// the active context.
-	//
-	// A slug is a name in one login's catalog, so it resolves against the
-	// federation you are logged into and no other. That is the whole contract:
-	// name the cluster, and your login says whose.
+	// `mirror add <repo> --cluster <host>` uses — so the lookup resolves against
+	// the right federation. With no --cluster, list from the active context.
 	runWithCore := runCore
-	clusterHost := ""
 	if cluster != "" {
-		if clusterHost, err = hostForClusterSlug(clusters, cluster); err != nil {
+		if err := validateClusterHost(cluster); err != nil {
 			return "", fmt.Errorf("invalid --cluster: %w", err)
 		}
 		runWithCore = func(cmd *cobra.Command, fn func(context.Context, *coreapi.Client) error) error {
-			return runCoreForCluster(cmd, clusterHost, fn)
+			return runCoreForCluster(cmd, cluster, fn)
 		}
 	}
 	if err := runWithCore(cmd, lister); err != nil {
@@ -542,7 +524,7 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 		return "", fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror add /gh/%s/%s' to onboard it", owner, repo, owner, repo)
 	}
 
-	chosen, err := selectPlacement(cmd, placements, clusterHost, clusterSlugByHost(clusters), picker)
+	chosen, err := selectPlacement(cmd, placements, cluster, picker)
 	if err != nil {
 		return "", err
 	}
@@ -676,21 +658,14 @@ var openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
 }
 
 // selectPlacement resolves which mirror placement a verb should act on. With one
-// placement it returns it directly. With an explicit clusterHost it picks the
-// matching one (or errors listing the available clusters). With more than one and
-// no selector it prompts interactively, failing fast with a p.selector pointer
-// when there's no terminal.
-//
-// Matching is on the HOST, because that is the coordinate a placement carries;
-// the caller has already turned the slug the user typed into one. Everything the
-// user READS is a slug, though — the "available" lists and the picker's labels
-// — since that is what they would type back. slugByHost is the catalog's
-// mapping; a host missing from it falls back to naming itself, so a placement on
-// a cluster the catalog does not list is still selectable rather than invisible.
-func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterHost string, slugByHost map[string]string, p placementPicker) (coreapi.ResolvedPlacement, error) {
+// placement it returns it directly. With an explicit clusterSel it picks the
+// matching one (or errors listing the available hosts). With more than one and no
+// selector it prompts interactively, failing fast with a p.selector pointer when
+// there's no terminal.
+func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterSel string, p placementPicker) (coreapi.ResolvedPlacement, error) {
 	// Dedupe by cluster host: one placement per cluster is what a caller acts on,
 	// and the same host appearing twice would only confuse the picker. Key on the
-	// case-folded host — DNS is case-insensitive, so a resolved host differing
+	// case-folded host — DNS is case-insensitive, so a selector value differing
 	// only in case from the API's ClusterHost must still match (the alternative is
 	// a misleading "not mirrored on ..." after a successful lookup + dial).
 	byHost := make(map[string]coreapi.ResolvedPlacement, len(placements))
@@ -704,21 +679,11 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 		hosts = append(hosts, key)
 	}
 	sort.Strings(hosts)
-	slugOf := func(host string) string {
-		if slug := slugByHost[host]; slug != "" {
-			return slug
-		}
-		return host
-	}
-	slugs := make([]string, len(hosts))
-	for i, h := range hosts {
-		slugs[i] = slugOf(h)
-	}
 
-	if clusterHost != "" {
-		match, ok := byHost[strings.ToLower(strings.TrimSpace(clusterHost))]
+	if clusterSel != "" {
+		match, ok := byHost[strings.ToLower(strings.TrimSpace(clusterSel))]
 		if !ok {
-			return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is not mirrored on %q; available: %s", slugOf(strings.ToLower(clusterHost)), strings.Join(slugs, ", "))
+			return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is not mirrored on %q; available: %s", clusterSel, strings.Join(hosts, ", "))
 		}
 		return match, nil
 	}
@@ -728,12 +693,12 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 
 	if !interactive.CanPromptInteractively() {
-		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is mirrored on %d clusters; pass %s to choose one of: %s", len(hosts), p.selector, strings.Join(slugs, ", "))
+		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is mirrored on %d clusters; pass %s to choose one of: %s", len(hosts), p.selector, strings.Join(hosts, ", "))
 	}
 
 	options := make([]huh.Option[string], len(hosts))
 	for i, h := range hosts {
-		options[i] = huh.NewOption(mirrorCellLabel(byHost[h], slugOf(h)), h)
+		options[i] = huh.NewOption(mirrorCellLabel(byHost[h]), h)
 	}
 
 	// The answer is read from the terminal, so the question has to be visible
@@ -807,22 +772,18 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 
 // mirrorCellLabel is the human label for a mirror placement in the clone picker:
 // the physical cell and jurisdiction when known, always anchored by the cluster
-// SLUG — the value the same command takes as --cluster, so a reader who cancels
-// the picker knows what to type next.
-func mirrorCellLabel(p coreapi.ResolvedPlacement, slug string) string {
+// host that goes into the clone URL — the value the same command takes as
+// --cluster, so a reader who cancels the picker knows what to type next.
+func mirrorCellLabel(p coreapi.ResolvedPlacement) string {
 	cell := strings.TrimSpace(p.Cell.Or(""))
 	jur := strings.TrimSpace(p.Jurisdiction.Or(""))
 	switch {
-	// The cell and the slug are routinely the same string (both name the
-	// region, e.g. aws-us-east-2); repeating it would read as a mistake.
-	case cell != "" && cell != slug && jur != "":
-		return fmt.Sprintf("%s (%s) — %s", cell, jur, slug)
-	case jur != "":
-		return fmt.Sprintf("%s (%s)", slug, jur)
-	case cell != "" && cell != slug:
-		return fmt.Sprintf("%s — %s", cell, slug)
+	case cell != "" && jur != "":
+		return fmt.Sprintf("%s (%s) — %s", cell, jur, p.ClusterHost)
+	case cell != "":
+		return fmt.Sprintf("%s — %s", cell, p.ClusterHost)
 	default:
-		return slug
+		return p.ClusterHost
 	}
 }
 

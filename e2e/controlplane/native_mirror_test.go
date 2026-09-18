@@ -100,7 +100,7 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	// A native mirror goes in a region other than the repo's own, so the target
 	// is read from the catalog rather than hardcoded: the account's home region
 	// is not this test's to assume.
-	target := pickForeignCluster(t, dir, repo)
+	home, target := pickClusters(t, dir, repo)
 	t.Logf("repo %s is primary on %s (%s); mirroring to %s (%s)", ref, repo.ClusterSlug, repo.Jurisdiction, target.Slug, target.Jurisdiction)
 
 	phase := func(label string, fn func(t *testing.T)) {
@@ -136,10 +136,12 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 			args []string
 			want string
 		}{
-			{"the repo's own cluster is its primary", []string{"mirror", "add", ref, "--cluster", repo.ClusterSlug}, "primary"},
-			{"a host is not a cluster slug", []string{"mirror", "add", ref, "--cluster", target.Host}, "not a cluster slug"},
-			{"an unknown cluster names the known ones", []string{"mirror", "add", ref, "--cluster", "no-such-cluster"}, "unknown cluster"},
-			{"removing the primary is repo delete", []string{"mirror", "remove", ref, "--cluster", repo.ClusterSlug}, "entire repo delete"},
+			{"the repo's own cluster is its primary", []string{"mirror", "add", ref, "--cluster", home.Host}, "primary"},
+			// --cluster takes the HOST column; the CLUSTER column is the
+			// plausible mistake, and the answer names the hosts to use instead.
+			{"a slug is not a cluster host", []string{"mirror", "add", ref, "--cluster", target.Slug}, "unknown cluster"},
+			{"an unknown cluster names the known ones", []string{"mirror", "add", ref, "--cluster", "no-such-cluster.entire.io"}, "unknown cluster"},
+			{"removing the primary is repo delete", []string{"mirror", "remove", ref, "--cluster", home.Host}, "entire repo delete"},
 			{"a bare pair names no forge", []string{"mirror", "add", name + "/" + name}, "must name its forge"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -153,12 +155,12 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	var cloneURL string
 	phase("add places a replica and waits for it to be readable", func(t *testing.T) {
 		stdout, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout,
-			"repo", "mirror", "add", ref, "--cluster", target.Slug, "--timeout", nativeMirrorSeedTimeout.String())
+			"repo", "mirror", "add", ref, "--cluster", target.Host, "--timeout", nativeMirrorSeedTimeout.String())
 		require.NoError(t, err, "stdout:\n%s\nstderr:\n%s", stdout, stderr)
 		// Registered right after the create, so it runs BEFORE the repo delete
 		// that was registered earlier (cleanups are LIFO).
 		t.Cleanup(func() {
-			_, _, _ = runEntireWithTimeout(t, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Slug)
+			_, _, _ = runEntireWithTimeout(t, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Host)
 		})
 		cloneURL = "entire://" + target.Host + ref
 		require.Contains(t, stdout, cloneURL, "a ready mirror prints the URL to clone it from")
@@ -187,7 +189,7 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	// reshaped — which is exactly how the previous assertions here rotted
 	// unnoticed, this suite not being part of CI.
 	phase("add is idempotent and says so", func(t *testing.T) {
-		stdout, _ := mustRunEntire(t, dir, "repo", "mirror", "add", ref, "--cluster", target.Slug, "--no-wait")
+		stdout, _ := mustRunEntire(t, dir, "repo", "mirror", "add", ref, "--cluster", target.Host, "--no-wait")
 		require.Contains(t, stdout, ref)
 		require.Contains(t, stdout, "exists", "a second add must report the placement it found, not a fresh create")
 		require.NotContains(t, stdout, "registered", "registered is for a placement this run created")
@@ -207,7 +209,7 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	// both fetches and pushes through it. If mirrors ever became read-only, the
 	// push below is what would say so, rather than a user discovering it.
 	phase("remote use points one URL at the mirror, and pushing through it works", func(t *testing.T) {
-		_, stderr, err := runEntire(t, clone, "repo", "remote", "use", "--cluster", target.Slug)
+		_, stderr, err := runEntire(t, clone, "repo", "remote", "use", "--cluster", target.Host)
 		require.NoError(t, err, stderr)
 
 		remotes := testutil.GitOutput(t, clone, "remote", "-v")
@@ -222,7 +224,7 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	})
 
 	phase("remove tears the replica down", func(t *testing.T) {
-		stdout, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Slug)
+		stdout, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Host)
 		require.NoError(t, err, stderr)
 		require.Contains(t, stdout, ref)
 		require.Contains(t, stdout, "removed")
@@ -239,22 +241,26 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	assertDeleted(t, dir, "org", org.ID)
 }
 
-// pickForeignCluster returns a cluster outside the repo's own region, which is
-// the only kind a native mirror may be placed on. Reading it from the catalog
-// rather than hardcoding a pair keeps the test working wherever the account's
-// repos land.
-func pickForeignCluster(t *testing.T, dir string, repo repoJSON) clusterJSON {
+// pickClusters returns the repo's own cluster and one outside its region — the
+// only kind a native mirror may be placed on. Both are read from the catalog
+// rather than hardcoded, so the test keeps working wherever the account's repos
+// land, and both are needed as HOSTS because that is what --cluster takes.
+func pickClusters(t *testing.T, dir string, repo repoJSON) (home, foreign clusterJSON) {
 	t.Helper()
 	stdout, _ := mustRunEntire(t, dir, "cluster", "list", "--json")
 	var clusters []clusterJSON
 	require.NoError(t, json.Unmarshal([]byte(stdout), &clusters), "stdout is not JSON:\n%s", stdout)
 	for _, cl := range clusters {
-		if cl.Jurisdiction != repo.Jurisdiction && cl.Host != "" {
-			return cl
+		switch {
+		case cl.Slug == repo.ClusterSlug:
+			home = cl
+		case cl.Jurisdiction != repo.Jurisdiction && cl.Host != "" && foreign.Host == "":
+			foreign = cl
 		}
 	}
-	t.Fatalf("no cluster outside %s to mirror into; catalog: %s", repo.Jurisdiction, stdout)
-	return clusterJSON{}
+	require.NotEmpty(t, home.Host, "the repo's own cluster %s is in the catalog: %s", repo.ClusterSlug, stdout)
+	require.NotEmpty(t, foreign.Host, "a cluster outside %s to mirror into: %s", repo.Jurisdiction, stdout)
+	return home, foreign
 }
 
 // TestControlPlane_RepoCreateRejectsClusterHost pins that a repo's home cluster

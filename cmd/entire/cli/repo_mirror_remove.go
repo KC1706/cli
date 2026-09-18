@@ -42,12 +42,10 @@ type mirrorPlacement struct {
 // than filtered away — the same choice selectPlacement makes for the clone
 // picker.
 //
-// Such a placement is reachable through the PICKER only. It has no catalog
-// slug, so the fallback names it by host, and --cluster takes slugs — a host
-// is refused by validateClusterSlug before placements are even resolved.
-// Accepting a host there would put back the second spelling this branch spent
-// its first commit removing, so the interactive path is the answer and a
-// script needs the cluster to be in the catalog.
+// A placement the catalog does not list keeps its own host, which is what
+// --cluster takes, so it stays nameable on the command line as well as in the
+// picker. Only a NATIVE placement missing from the catalog is picker-only: it
+// carries a slug and no host, and there is no host to type for it.
 func listMirrorPlacements(ctx context.Context, c *coreapi.Client, ref mirrorRepoRef, regions []regionChoice) ([]mirrorPlacement, *coreapi.Repo, error) {
 	if ref.forge == nativeCloneForge {
 		repo, err := resolveNativeRepo(ctx, c, ref.owner, ref.repo)
@@ -81,7 +79,8 @@ func listMirrorPlacements(ctx context.Context, c *coreapi.Client, ref mirrorRepo
 
 // regionForSlug names a cluster the catalog knows, or falls back to the slug
 // alone. The fallback carries no host, which is all a native removal needs
-// (those are addressed by repo ULID and slug).
+// (those are addressed by repo ULID and slug) — but it is also why such a
+// placement can only be chosen from the picker: --cluster takes a host.
 func regionForSlug(regions []regionChoice, slug string) regionChoice {
 	if r, ok := regionBySlug(regions, slug); ok {
 		return r
@@ -90,13 +89,12 @@ func regionForSlug(regions []regionChoice, slug string) regionChoice {
 }
 
 // regionForHost is the same for a GitHub placement, which names its cluster by
-// host. The fallback keeps the host — what the delete is addressed at — and
-// uses it as the slug so the placement can still be named on the command line.
+// host. The fallback keeps the host — both what the delete is addressed at and
+// what --cluster takes — and uses it as the slug so the placement still has a
+// label.
 func regionForHost(regions []regionChoice, host string) regionChoice {
-	for _, r := range regions {
-		if strings.EqualFold(r.host, host) {
-			return r
-		}
+	if r, ok := regionByHost(regions, host); ok {
+		return r
 	}
 	return regionChoice{slug: host, host: host}
 }
@@ -129,35 +127,35 @@ func mirrorPlacementRegions(placements []mirrorPlacement) []regionChoice {
 // one would delete a copy the caller never named. A terminal gets a
 // multi-select over what the repo actually has — which is also the
 // confirmation, since nothing is removed that was not ticked.
-func chooseMirrorRemoveRegions(cmd *cobra.Command, ref mirrorRepoRef, placements []mirrorPlacement, regions []regionChoice, slugs []string) ([]regionChoice, error) {
+func chooseMirrorRemoveRegions(cmd *cobra.Command, ref mirrorRepoRef, placements []mirrorPlacement, regions []regionChoice, hosts []string) ([]regionChoice, error) {
 	byPrimary := map[string]bool{}
 	for _, p := range placements {
-		if p.primary {
-			byPrimary[strings.ToLower(p.region.slug)] = true
+		if p.primary && p.region.host != "" {
+			byPrimary[strings.ToLower(p.region.host)] = true
 		}
 	}
 	removable := removableMirrorPlacements(placements)
 
-	if len(slugs) > 0 {
-		chosen := make([]regionChoice, 0, len(slugs))
+	if len(hosts) > 0 {
+		chosen := make([]regionChoice, 0, len(hosts))
 		seen := map[string]bool{}
-		for _, slug := range slugs {
-			if byPrimary[strings.ToLower(slug)] {
-				return nil, fmt.Errorf("%s lives on %s: that is its primary, not a mirror, and removing it is `entire repo delete %s`", ref.qualified(), slug, ref.qualified())
+		for _, host := range hosts {
+			if byPrimary[strings.ToLower(host)] {
+				return nil, fmt.Errorf("%s lives on %s: that is its primary, not a mirror, and removing it is `entire repo delete %s`", ref.qualified(), host, ref.qualified())
 			}
-			region, ok := regionBySlug(mirrorPlacementRegions(removable), slug)
+			region, ok := regionByHost(mirrorPlacementRegions(removable), host)
 			if !ok {
 				// The listing is not the authority on what exists, only on what
 				// is worth OFFERING. A GitHub placement comes from the
 				// pull-gated resolver, so a failed or suspended one — exactly
-				// the kind worth tearing down — can be missing from it. A slug
-				// the user named explicitly is therefore attempted against the
-				// server, which answers 404 if it really is not there. Only the
-				// picker is limited to what was listed.
-				if catalogued, known := regionBySlug(regions, slug); known {
+				// the kind worth tearing down — can be missing from it. A
+				// cluster the user named explicitly is therefore attempted
+				// against the server, which answers 404 if it really is not
+				// there. Only the picker is limited to what was listed.
+				if catalogued, known := regionByHost(regions, host); known {
 					region = catalogued
 				} else {
-					return nil, fmt.Errorf("%s: unknown cluster %q; it is mirrored on: %s", ref.qualified(), slug, strings.Join(regionSlugs(mirrorPlacementRegions(removable)), ", "))
+					return nil, fmt.Errorf("%s: unknown cluster %q; it is mirrored on: %s", ref.qualified(), host, strings.Join(regionHosts(mirrorPlacementRegions(removable)), ", "))
 				}
 			}
 			if seen[region.slug] {
@@ -174,21 +172,21 @@ func chooseMirrorRemoveRegions(cmd *cobra.Command, ref mirrorRepoRef, placements
 	}
 	if !interactive.CanPromptInteractively() {
 		return nil, fmt.Errorf("pass --cluster to say which mirror of %s to remove; it is on: %s",
-			ref.qualified(), strings.Join(regionSlugs(mirrorPlacementRegions(removable)), ", "))
+			ref.qualified(), strings.Join(regionHosts(mirrorPlacementRegions(removable)), ", "))
 	}
 	return pickRemoveRegions(cmd.Context(), cmd.ErrOrStderr(), removable)
 }
 
 // runMirrorRemove is the `repo mirror remove <repo>` body: find where the repo
 // is mirrored, choose which of those to drop, then remove them in parallel.
-func runMirrorRemove(cmd *cobra.Command, repoRef string, clusterSlugs []string, timeout time.Duration) error {
+func runMirrorRemove(cmd *cobra.Command, repoRef string, clusterHosts []string, timeout time.Duration) error {
 	cmd.SilenceUsage = true
 	ref, err := parseMirrorRepoRef(repoRef)
 	if err != nil {
 		return err
 	}
-	for _, slug := range clusterSlugs {
-		if err := validateClusterSlug(slug); err != nil {
+	for _, host := range clusterHosts {
+		if err := validateClusterHost(host); err != nil {
 			return fmt.Errorf("invalid --cluster: %w", err)
 		}
 	}
@@ -210,7 +208,7 @@ func runMirrorRemove(cmd *cobra.Command, repoRef string, clusterSlugs []string, 
 		return err
 	}
 
-	chosen, err := chooseMirrorRemoveRegions(cmd, ref, placements, regions, clusterSlugs)
+	chosen, err := chooseMirrorRemoveRegions(cmd, ref, placements, regions, clusterHosts)
 	if err != nil {
 		return err
 	}

@@ -515,33 +515,36 @@ func TestBuildRepoDir_ProviderOutranksThePlacementFlag(t *testing.T) {
 	require.Equal(t, "entire://aws-us-east-2.entire.io/et/acme/native", rows[0].Placements[0].CloneURL)
 }
 
-// TestRepoMirrorAdd_NativeRefusesAHostBeforeAnyRequest pins that --cluster is
-// shape-checked on the native path too. A host reached the catalog lookup and
-// came back as an unknown cluster, when the answer is that it is not a slug.
+// TestRepoMirrorAdd_ClusterSlugIsAnsweredWithHosts pins what happens when
+// someone types the CLUSTER column of `entire cluster list` instead of the HOST
+// column. --cluster takes a host, so a slug is an unknown cluster — and the
+// refusal has to name the hosts, since a list of slugs would send them round
+// the same loop.
 //
 // Not parallel: swaps the package-level activeCoreClient seam.
-func TestRepoMirrorAdd_NativeRefusesAHostBeforeAnyRequest(t *testing.T) {
-	serveClusters(t, testClusterCatalog) // any request at all would be a failure
+func TestRepoMirrorAdd_ClusterSlugIsAnsweredWithHosts(t *testing.T) {
+	serveClusters(t, testClusterCatalog)
 	cmd := newRepoMirrorAddCmd()
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"/et/acme/web", "--cluster", "aws-eu-central-1.entire.io"})
+	cmd.SetArgs([]string{"/gh/acme/web", "--cluster", "aws-us-east-2"})
 	err := cmd.ExecuteContext(t.Context())
-	require.ErrorContains(t, err, "invalid --cluster")
-	require.ErrorContains(t, err, "is not a cluster slug")
+	require.ErrorContains(t, err, "unknown cluster")
+	require.ErrorContains(t, err, defaultClusterHost, "the answer is the host to type instead")
 }
 
-// TestHostForClusterSlug_FoldsCase pins one matching rule for cluster slugs.
-// Matching exactly here while the native path folded meant a single spelling of
-// --cluster was "unknown cluster" to one command and a valid target to another.
-func TestHostForClusterSlug_FoldsCase(t *testing.T) {
+// TestRegionByHost_FoldsCase pins the matching rule for --cluster. DNS is
+// case-insensitive, so a mixed-case host must resolve to the same cluster —
+// and to the SLUG behind it, which is what the native-mirror API is keyed by.
+func TestRegionByHost_FoldsCase(t *testing.T) {
 	t.Parallel()
-	catalog := []coreapi.Cluster{{Slug: "aws-eu-central-1", PublicUrl: "https://aws-eu-central-1.entire.io"}}
-	for _, spelling := range []string{"aws-eu-central-1", "AWS-EU-CENTRAL-1", "Aws-Eu-Central-1"} {
-		host, err := hostForClusterSlug(catalog, spelling)
-		require.NoError(t, err, spelling)
-		require.Equal(t, "aws-eu-central-1.entire.io", host,
-			"the catalog's own spelling indexes the host map, so no casing can match and still miss the host")
+	regions := clustersToRegions([]coreapi.Cluster{
+		{Slug: "aws-eu-central-1", PublicUrl: "https://aws-eu-central-1.entire.io"},
+	})
+	for _, spelling := range []string{"aws-eu-central-1.entire.io", "AWS-EU-CENTRAL-1.ENTIRE.IO", "Aws-Eu-Central-1.Entire.io"} {
+		got, ok := regionByHost(regions, spelling)
+		require.True(t, ok, spelling)
+		require.Equal(t, "aws-eu-central-1", got.slug, "the slug is what the native create is addressed by")
 	}
 }
 

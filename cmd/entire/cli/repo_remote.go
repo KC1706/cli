@@ -432,9 +432,9 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			"local git config — the mirror must already exist (`entire repo " +
 			"mirror add`); nothing server-side is changed.\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo remote use\n" +
-			"  entire repo remote use --cluster aws-us-east-2\n" +
+			"  entire repo remote use --cluster aws-us-east-2.entire.io\n" +
 			"  entire repo remote use /gh/octocat/hello-world\n" +
-			"  entire repo remote use /gh/octocat/hello-world --cluster aws-us-east-2\n" +
+			"  entire repo remote use /gh/octocat/hello-world --cluster aws-us-east-2.entire.io\n" +
 			"  entire repo remote use --remote entire\n" +
 			"  entire repo remote use --upstream ''",
 		Args: cobra.MaximumNArgs(1),
@@ -456,9 +456,9 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			if len(args) > 0 {
 				upstreamArg = strings.TrimSpace(args[0])
 			}
-			clusterSlug := strings.TrimSpace(cluster)
-			if clusterSlug != "" {
-				if err := validateClusterSlug(clusterSlug); err != nil {
+			clusterHost := strings.TrimSpace(cluster)
+			if clusterHost != "" {
+				if err := validateClusterHost(clusterHost); err != nil {
 					return fmt.Errorf("invalid --cluster: %w", err)
 				}
 			}
@@ -480,12 +480,11 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			// For GitHub, the pull-gated placement lookup is the same authority
 			// the clone's STS exchange enforces, so anything the user could clone
 			// resolves here — public mirrors included. For a native repo the
-			// placements are the repo's own primary plus its ready mirrors. The
-			// catalog alongside either is what names each placement's cluster by
-			// the slug --cluster takes.
+			// placements are the repo's own primary plus its ready mirrors,
+			// which the catalog turns into the cluster hosts a placement is
+			// addressed by.
 			var (
 				placements []coreapi.ResolvedPlacement
-				clusters   []coreapi.Cluster
 				nativeRepo *coreapi.Repo
 			)
 			if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
@@ -498,7 +497,7 @@ func newRepoRemoteUseCmd() *cobra.Command {
 					if lerr != nil {
 						return lerr
 					}
-					nativeRepo, clusters = repo, cat
+					nativeRepo = repo
 					placements = nativeUsePlacements(repo, mirrors, cat)
 					return nil
 				}
@@ -507,11 +506,6 @@ func newRepoRemoteUseCmd() *cobra.Command {
 					return lerr
 				}
 				placements = ps
-				cat, cerr := c.ListClusters(ctx)
-				if cerr != nil {
-					return cerr
-				}
-				clusters = cat.Clusters
 				return nil
 			}); err != nil {
 				return err
@@ -520,26 +514,7 @@ func newRepoRemoteUseCmd() *cobra.Command {
 				return fmt.Errorf("%s has no cluster you can fetch from; create a mirror first:\n  entire repo mirror add %s", qualified, qualified)
 			}
 
-			// --cluster names a slug; the picker matches on the host a placement
-			// carries, so resolve one to the other before selecting. An unknown
-			// slug is reported by selectPlacement against the repo's own
-			// placements ("not mirrored on X; available: ..."), which is a better
-			// answer here than the catalog's "unknown cluster".
-			clusterHost := ""
-			if clusterSlug != "" {
-				host, herr := hostForClusterSlug(clusters, clusterSlug)
-				if herr != nil {
-					// Deliberately swallowed: the catalog's "unknown cluster,
-					// available: <every cluster>" is the wrong answer here. The
-					// user is choosing among THIS repo's placements, so pass the
-					// slug through unresolved and let selectPlacement answer with
-					// the clusters this repo is actually mirrored on.
-					host = clusterSlug
-				}
-				clusterHost = host
-			}
-
-			chosen, err := selectPlacement(cmd, placements, clusterHost, clusterSlugByHost(clusters), placementPicker{
+			chosen, err := selectPlacement(cmd, placements, clusterHost, placementPicker{
 				selector: clusterSelectorFlag,
 				title:    qualified + " is on more than one cluster — pick the one to use",
 				action:   "Remote update",
@@ -559,11 +534,7 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			// would report "✓ Repointed remote" while leaving the remote
 			// pointing nowhere — the one outcome worse than refusing.
 			if mirrorURL == "" {
-				cluster := clusterSlugByHost(clusters)[strings.ToLower(chosen.ClusterHost)]
-				if cluster == "" {
-					cluster = chosen.ClusterHost
-				}
-				return fmt.Errorf("%s has no clone URL on %s yet (still provisioning?); remote %q is unchanged", qualified, cluster, remote)
+				return fmt.Errorf("%s has no clone URL on %s yet (still provisioning?); remote %q is unchanged", qualified, chosen.ClusterHost, remote)
 			}
 
 			remotes, err := listGitRemotes(ctx, repoRoot)
@@ -608,6 +579,6 @@ func newRepoRemoteUseCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&remote, "remote", defaultMirrorRemote, "Git remote to point at the mirror")
 	cmd.Flags().StringVar(&upstream, "upstream", defaultMirrorUpstreamRemote, "Remote to preserve the replaced URL under; empty to discard it")
-	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster slug to use when the repo is mirrored on several, as `entire cluster list` prints it")
+	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster host to use when the repo is mirrored on several")
 	return cmd
 }
