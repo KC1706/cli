@@ -2148,8 +2148,10 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 		mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
-	// The repo is mirrored on both catalog clusters, so either can be removed.
-	serveRemovePlacements(t, "eu.example", "aws-us-east-2.entire.io")
+	// The resolver lists only eu. aws-us-east-2 is in the catalog but NOT in the
+	// listing — the shape a failed or unpullable placement takes, which must
+	// still be removable when named.
+	serveRemovePlacements(t, "eu.example")
 	seamClusterCoreClient(t, client)
 	run := func(args ...string) (stdout string, err error) {
 		mu.Lock()
@@ -2172,8 +2174,12 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 		require.Contains(t, stdout, mirrorStatusRemoved)
 	})
 
-	// The whole point of accepting several: one invocation, one summary.
-	t.Run("several clusters are removed in one run", func(t *testing.T) {
+	// The whole point of accepting several: one invocation, one summary. The
+	// second cluster is also the unlisted one, so this pins that a slug the
+	// caller named explicitly reaches the server even when the pull-gated
+	// resolver did not report it — otherwise the placement most worth tearing
+	// down (failed, suspended, unpullable) would be unreachable.
+	t.Run("several clusters are removed in one run, listed or not", func(t *testing.T) {
 		_, err := run("/gh/o/r", "--cluster", "eu,aws-us-east-2")
 		require.NoError(t, err)
 		require.ElementsMatch(t, []string{"eu.example", "aws-us-east-2.entire.io"}, deleted)
@@ -2193,11 +2199,12 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 		require.Empty(t, deleted)
 	})
 
-	// Answered against the repo's own placements, not the catalog: "not
-	// mirrored there" is the useful answer when the cluster exists.
-	t.Run("a cluster the repo is not on names the ones it is", func(t *testing.T) {
+	// A slug in neither the listing nor the catalog is a typo, and the answer
+	// names where the repo actually is.
+	t.Run("a cluster that exists nowhere names where the repo is", func(t *testing.T) {
 		_, err := run("/gh/o/r", "--cluster", "nope")
-		require.ErrorContains(t, err, "is not mirrored on")
+		require.ErrorContains(t, err, "unknown cluster")
+		require.ErrorContains(t, err, "eu")
 		require.Empty(t, deleted)
 	})
 

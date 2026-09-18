@@ -10,14 +10,19 @@ import (
 	"github.com/entireio/cli/internal/coreapi"
 )
 
-// defaultClusterSlug is the cluster a mirror command targets when --cluster is
-// omitted: `mirror remove` and `access list` default the flag to it outright,
-// and `mirror add` falls back to it when there is no terminal to offer a
-// picker on. The no-arg add wizard and the interactive one-shot `add <repo>`
-// instead enumerate real clusters from the catalog (GET /api/v1/clusters, see
-// availableRegions and resolveOneShotClusterHost in repo_mirror_add_wizard.go);
-// this stays as the fixed fallback for non-interactive invocations, so scripts
-// keep a stable default.
+// defaultClusterSlug is the cluster a command falls back to when --cluster is
+// omitted and there is no terminal to offer a picker on: `access list` defaults
+// its flag to it outright, and `mirror add` uses it for a non-interactive run,
+// so scripts keep a stable target.
+//
+// `mirror remove` deliberately has no default. Which clusters a repo is on is a
+// property of the repo rather than of the catalog, and removing is destructive,
+// so guessing would tear down a copy the caller never named (see
+// chooseMirrorRemoveRegions).
+//
+// Interactive runs never reach this: they enumerate the real catalog (GET
+// /api/v1/clusters via availableRegions) and pick from it — chooseMirrorAddRegions
+// → pickRegions for add, chooseMirrorRemoveRegions → pickRemoveRegions for remove.
 const defaultClusterSlug = "aws-us-east-2"
 
 // validateClusterSlug rejects a --cluster value that is not a bare catalog

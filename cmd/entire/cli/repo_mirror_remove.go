@@ -122,7 +122,7 @@ func mirrorPlacementRegions(placements []mirrorPlacement) []regionChoice {
 // one would delete a copy the caller never named. A terminal gets a
 // multi-select over what the repo actually has — which is also the
 // confirmation, since nothing is removed that was not ticked.
-func chooseMirrorRemoveRegions(cmd *cobra.Command, ref mirrorRepoRef, placements []mirrorPlacement, slugs []string) ([]regionChoice, error) {
+func chooseMirrorRemoveRegions(cmd *cobra.Command, ref mirrorRepoRef, placements []mirrorPlacement, regions []regionChoice, slugs []string) ([]regionChoice, error) {
 	byPrimary := map[string]bool{}
 	for _, p := range placements {
 		if p.primary {
@@ -140,10 +140,18 @@ func chooseMirrorRemoveRegions(cmd *cobra.Command, ref mirrorRepoRef, placements
 			}
 			region, ok := regionBySlug(mirrorPlacementRegions(removable), slug)
 			if !ok {
-				if len(removable) == 0 {
-					return nil, fmt.Errorf("%s has no mirrors to remove", ref.qualified())
+				// The listing is not the authority on what exists, only on what
+				// is worth OFFERING. A GitHub placement comes from the
+				// pull-gated resolver, so a failed or suspended one — exactly
+				// the kind worth tearing down — can be missing from it. A slug
+				// the user named explicitly is therefore attempted against the
+				// server, which answers 404 if it really is not there. Only the
+				// picker is limited to what was listed.
+				if catalogued, known := regionBySlug(regions, slug); known {
+					region = catalogued
+				} else {
+					return nil, fmt.Errorf("%s: unknown cluster %q; it is mirrored on: %s", ref.qualified(), slug, strings.Join(regionSlugs(mirrorPlacementRegions(removable)), ", "))
 				}
-				return nil, fmt.Errorf("%s is not mirrored on %q; it is on: %s", ref.qualified(), slug, strings.Join(regionSlugs(mirrorPlacementRegions(removable)), ", "))
 			}
 			if seen[region.slug] {
 				continue
@@ -195,7 +203,7 @@ func runMirrorRemove(cmd *cobra.Command, repoRef string, clusterSlugs []string, 
 		return err
 	}
 
-	chosen, err := chooseMirrorRemoveRegions(cmd, ref, placements, clusterSlugs)
+	chosen, err := chooseMirrorRemoveRegions(cmd, ref, placements, regions, clusterSlugs)
 	if err != nil {
 		return err
 	}

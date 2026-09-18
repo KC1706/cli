@@ -238,6 +238,11 @@ func awaitNativeMirrorRemoved(ctx context.Context, c *coreapi.Client, repoID, cl
 	defer ticker.Stop()
 
 	var consecutiveErrs int
+	// The same read-after-write grace awaitNativeMirrorReady gives the create:
+	// the FIRST listing after a delete may not carry the intent yet, and a row
+	// that still reads active then is lag, not a re-creation. Exactly one tick,
+	// so a row that genuinely stops being deleted still ends the wait.
+	polls := 0
 	for {
 		placements, err := listNativeMirrors(ctx, c, repoID)
 		switch {
@@ -251,11 +256,12 @@ func awaitNativeMirrorRemoved(ctx context.Context, c *coreapi.Client, repoID, cl
 			}
 		default:
 			consecutiveErrs = 0
+			polls++
 			p, ok := findNativeMirror(placements, clusterSlug)
 			if !ok {
 				return nil
 			}
-			if p.DesiredState != coreapi.NativeMirrorPlacementDesiredStateDeleted {
+			if p.DesiredState != coreapi.NativeMirrorPlacementDesiredStateDeleted && polls > 1 {
 				return fmt.Errorf("native mirror on %s is no longer being removed; something re-created it", clusterSlug)
 			}
 		}
@@ -490,8 +496,9 @@ func reportNativeMirrorNotes(w io.Writer, mirrors []coreapi.NativeMirrorPlacemen
 //
 // A placement that is still seeding, failed or suspended serves nothing, so
 // offering it would hand the user a remote that cannot fetch. The primary is
-// always offered — it is where the repo lives, and the only placement that
-// accepts a push.
+// always offered: it is where the repo lives, and it is ready by definition
+// once the repo is. Pushes are not a reason — a ready mirror serves those too,
+// which is why a remote pointed at one needs no separate push target.
 //
 // The result is coreapi.ResolvedPlacement, the shape the GitHub path resolves
 // from the server, so both forges feed one picker (selectPlacement) instead of

@@ -181,11 +181,16 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 		require.Equal(t, cloneURL, mirror.CloneURL)
 	})
 
+	// Anchored on the STATUS token rather than a sentence: the status vocabulary
+	// ("exists", "registered", "ready", "removed") is what the summary table and
+	// the progress lines both carry, while prose moves whenever the reporting is
+	// reshaped — which is exactly how the previous assertions here rotted
+	// unnoticed, this suite not being part of CI.
 	phase("add is idempotent and says so", func(t *testing.T) {
-		stdout, stderr := mustRunEntire(t, dir, "repo", "mirror", "add", ref, "--cluster", target.Slug, "--no-wait")
-		require.Contains(t, stderr, "already placed", "a second add must not read as a fresh create")
-		require.NotContains(t, stderr, "Placing")
-		_ = stdout
+		stdout, _ := mustRunEntire(t, dir, "repo", "mirror", "add", ref, "--cluster", target.Slug, "--no-wait")
+		require.Contains(t, stdout, ref)
+		require.Contains(t, stdout, "exists", "a second add must report the placement it found, not a fresh create")
+		require.NotContains(t, stdout, "registered", "registered is for a placement this run created")
 	})
 
 	clone := filepath.Join(dir, "from-mirror")
@@ -219,7 +224,8 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	phase("remove tears the replica down", func(t *testing.T) {
 		stdout, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Slug)
 		require.NoError(t, err, stderr)
-		require.Contains(t, stdout, "Removed the mirror")
+		require.Contains(t, stdout, ref)
+		require.Contains(t, stdout, "removed")
 
 		after, _ := mustRunEntire(t, dir, "repo", "mirror", "get", ref, "--json")
 		row := decodeJSON[repoDirJSON](t, after)

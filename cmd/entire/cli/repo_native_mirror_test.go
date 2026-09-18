@@ -343,6 +343,20 @@ func TestAwaitNativeMirrorRemoved(t *testing.T) {
 		require.NoError(t, awaitNativeMirrorRemoved(t.Context(), c, "01REPO", slug))
 	})
 
+	// One tick of grace, matching the create wait: the first listing after a
+	// delete may not carry the intent yet, and a row that still reads active
+	// then is lag rather than a re-creation.
+	t.Run("a row not yet marked deleted is waited for, not mourned", func(t *testing.T) {
+		deleting := nativeMirrorAt(coreapi.NativeMirrorPlacementStatusReady)
+		deleting.DesiredState = coreapi.NativeMirrorPlacementDesiredStateDeleted
+		c := nativeMirrorPoller(t, [][]coreapi.NativeMirrorPlacement{
+			{nativeMirrorAt(coreapi.NativeMirrorPlacementStatusReady)}, // delete not propagated yet
+			{deleting},
+			nil,
+		})
+		require.NoError(t, awaitNativeMirrorRemoved(t.Context(), c, "01REPO", slug))
+	})
+
 	t.Run("a re-created placement stops the wait instead of looping", func(t *testing.T) {
 		c := nativeMirrorPoller(t, [][]coreapi.NativeMirrorPlacement{
 			{nativeMirrorAt(coreapi.NativeMirrorPlacementStatusReady)},
