@@ -38,9 +38,16 @@ type mirrorPlacement struct {
 //
 // Each placement names its own cluster: the catalog only ENRICHES it with the
 // slug and region. A placement whose cluster the catalog does not list (an
-// unusable publicUrl, or one dropped from the registry) is exactly the one you
-// most need to tear down, so it is listed and removable rather than filtered
-// away — the same choice selectPlacement makes for the clone picker.
+// unusable publicUrl, or one dropped from the registry) is still listed rather
+// than filtered away — the same choice selectPlacement makes for the clone
+// picker.
+//
+// Such a placement is reachable through the PICKER only. It has no catalog
+// slug, so the fallback names it by host, and --cluster takes slugs — a host
+// is refused by validateClusterSlug before placements are even resolved.
+// Accepting a host there would put back the second spelling this branch spent
+// its first commit removing, so the interactive path is the answer and a
+// script needs the cluster to be in the catalog.
 func listMirrorPlacements(ctx context.Context, c *coreapi.Client, ref mirrorRepoRef, regions []regionChoice) ([]mirrorPlacement, *coreapi.Repo, error) {
 	if ref.forge == nativeCloneForge {
 		repo, err := resolveNativeRepo(ctx, c, ref.owner, ref.repo)
