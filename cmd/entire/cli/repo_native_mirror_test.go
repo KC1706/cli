@@ -291,9 +291,8 @@ func TestAwaitNativeMirrorReady(t *testing.T) {
 		page []coreapi.NativeMirrorPlacement
 		want string
 	}{
-		"failed is terminal":            {[]coreapi.NativeMirrorPlacement{nativeMirrorAt(coreapi.NativeMirrorPlacementStatusFailed)}, "failed"},
-		"suspended is terminal":         {[]coreapi.NativeMirrorPlacement{nativeMirrorAt(coreapi.NativeMirrorPlacementStatusSuspended)}, "suspended"},
-		"a vanished row stops the wait": {nil, "no longer listed"},
+		"failed is terminal":    {[]coreapi.NativeMirrorPlacement{nativeMirrorAt(coreapi.NativeMirrorPlacementStatusFailed)}, "failed"},
+		"suspended is terminal": {[]coreapi.NativeMirrorPlacement{nativeMirrorAt(coreapi.NativeMirrorPlacementStatusSuspended)}, "suspended"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := nativeMirrorPoller(t, [][]coreapi.NativeMirrorPlacement{tc.page})
@@ -301,6 +300,26 @@ func TestAwaitNativeMirrorReady(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
+
+	// The create hands back a row the listing may not carry yet, so one absent
+	// poll is tolerated. Exactly one: a row that never appears has to fail
+	// rather than spin, which is what waiting on "seen at least once" did — it
+	// hung the whole package until the test binary's deadline.
+	t.Run("a row missing from the first listing is waited for, not mourned", func(t *testing.T) {
+		c := nativeMirrorPoller(t, [][]coreapi.NativeMirrorPlacement{
+			nil, // the listing has not caught up with the create
+			{nativeMirrorAt(coreapi.NativeMirrorPlacementStatusReady)},
+		})
+		got, err := awaitNativeMirrorReady(t.Context(), c, "01REPO", slug)
+		require.NoError(t, err)
+		require.Equal(t, coreapi.NativeMirrorPlacementStatusReady, got.Status)
+	})
+
+	t.Run("a row still missing after the grace tick is terminal", func(t *testing.T) {
+		c := nativeMirrorPoller(t, [][]coreapi.NativeMirrorPlacement{nil})
+		_, err := awaitNativeMirrorReady(t.Context(), c, "01REPO", slug)
+		require.ErrorContains(t, err, "no longer listed")
+	})
 
 	t.Run("a teardown that overtakes the wait stops it", func(t *testing.T) {
 		deleting := nativeMirrorAt(coreapi.NativeMirrorPlacementStatusProcessing)

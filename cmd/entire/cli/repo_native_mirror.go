@@ -61,11 +61,13 @@ func loadNativeRepo(ctx context.Context, c *coreapi.Client, ref mirrorRepoRef) (
 // primary and region instead of a generic refusal, and costs no round trip
 // because both inputs were already fetched.
 func checkNativeMirrorTarget(repo *coreapi.Repo, clusters []coreapi.Cluster, clusterSlug, ref string) error {
-	if provider := repo.Provider.Or(""); provider != repoProviderEntire {
-		// A /gh/ ref never reaches here (the verb dispatches on the forge), so
-		// this is a repo the control plane calls something other than native —
-		// a mirror addressed by a native-looking path, or a provider this build
-		// does not know.
+	// Provider is optional on the wire, so an UNSET one is "the server did not
+	// say" and is left for the server to judge — the same reasoning the state
+	// check below applies, and the same `repo protection` uses. Only a value
+	// that definitely names another forge is refused here; failing closed on ""
+	// would reject every repo whose provider the response omits, with a message
+	// quoting an empty string.
+	if provider := repo.Provider.Or(""); provider != "" && provider != repoProviderEntire {
 		return fmt.Errorf("repo %s is not an Entire-native repository (provider %q); only native repos have native mirrors", ref, provider)
 	}
 	// State is an open string on the client, so an UNSET one is "the server
@@ -175,6 +177,12 @@ func awaitNativeMirrorReady(ctx context.Context, c *coreapi.Client, repoID, clus
 
 	var last coreapi.NativeMirrorPlacement
 	var consecutiveErrs int
+	// The caller has just been handed this placement by the create, so the FIRST
+	// listing that does not carry it is the two endpoints disagreeing for a
+	// moment, not a removal. Exactly one tick of grace: after that, absence is
+	// terminal — a row that never appears must fail rather than spin, which is
+	// what waiting on "seen at least once" would do forever.
+	polls := 0
 	for {
 		placements, err := listNativeMirrors(ctx, c, repoID)
 		switch {
@@ -190,8 +198,12 @@ func awaitNativeMirrorReady(ctx context.Context, c *coreapi.Client, repoID, clus
 			}
 		default:
 			consecutiveErrs = 0
+			polls++
 			p, ok := findNativeMirror(placements, clusterSlug)
 			if !ok {
+				if polls == 1 {
+					break // one tick for the listing to catch up with the create
+				}
 				return last, fmt.Errorf("native mirror on %s is no longer listed; something else removed it", clusterSlug)
 			}
 			last = p
@@ -311,13 +323,18 @@ func createOneNativeMirror(ctx context.Context, t mirrorTarget, c *coreapi.Clien
 	// The endpoint is idempotent per (repo, cluster) and answers identically
 	// either way, so the row's own state is the only thing that can say whether
 	// this call made the placement or found it.
-	if !nativeMirrorIsFresh(*created) {
-		res.status = mirrorStatusExists
-		report(res.status, true, true)
-		return res
-	}
+	//
+	// That distinction only reaches the STATUS column with --no-wait, where
+	// nothing was verified and "was it already here" is all there is to report.
+	// A waiting run must wait either way: re-running the command after a Ctrl+C
+	// is the normal way to resume a seed, and returning "exists" there would
+	// hand back a clone URL for a replica still being written.
+	existed := !nativeMirrorIsFresh(*created)
 	if opts.noWait {
 		res.status = mirrorStatusRegistered
+		if existed {
+			res.status = mirrorStatusExists
+		}
 		report(res.status, true, true)
 		return res
 	}

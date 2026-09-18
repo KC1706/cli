@@ -1321,7 +1321,7 @@ func renderRepoDetail(w io.Writer, row repoDirRow) {
 			fmt.Fprintf(w, "Not mirrored on any cluster (%s).\n", row.Status)
 			return
 		}
-		fmt.Fprintln(w, "No GitHub mirror placements.")
+		fmt.Fprintln(w, "Not mirrored on any cluster.")
 		return
 	}
 
@@ -1452,6 +1452,7 @@ func badMirrorRefErr(err error) error {
 
 func newRepoMirrorRemoveCmd() *cobra.Command {
 	var clusters []string
+	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "remove <repo>",
 		Short: "Remove a repository's mirrors from one or more clusters",
@@ -1471,10 +1472,18 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 			"  entire repo mirror remove /gh/octocat/hello-world --cluster aws-eu-central-1\n" +
 			"  entire repo mirror remove /et/acme/web --cluster aws-eu-central-1,aws-ap-south-1",
 		Args: cobra.ExactArgs(1),
+		PreRunE: func(_ *cobra.Command, _ []string) error {
+			// Zero is an unbounded wait, matching `add`.
+			if timeout < 0 {
+				return errors.New("--timeout must be zero or positive")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMirrorRemove(cmd, args[0], clusters)
+			return runMirrorRemove(cmd, args[0], clusters, timeout)
 		},
 	}
 	cmd.Flags().StringSliceVar(&clusters, "cluster", nil, "Cluster slug(s) to remove the mirror from, as `entire cluster list` prints them; repeat or comma-separate for several (a terminal offers a multi-select when omitted)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "How long to wait for each placement to be torn down (0 waits indefinitely)")
 	return cmd
 }

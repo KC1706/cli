@@ -1777,7 +1777,7 @@ func TestRemoveOneMirror(t *testing.T) {
 		c, err := coreapi.NewWithBearer(srv.URL, "tok")
 		require.NoError(t, err)
 
-		got := removeOneMirror(t.Context(), target, c, nil, nil)
+		got := removeOneMirror(t.Context(), target, c, nil, time.Minute, nil)
 		require.NoError(t, got.err)
 		require.Equal(t, mirrorStatusRemoved, got.status)
 		require.Equal(t, "/gh/octocat/hello-world", got.ref())
@@ -1798,7 +1798,7 @@ func TestRemoveOneMirror(t *testing.T) {
 		c, err := coreapi.NewWithBearer(srv.URL, "tok")
 		require.NoError(t, err)
 
-		got := removeOneMirror(t.Context(), target, c, nil, nil)
+		got := removeOneMirror(t.Context(), target, c, nil, time.Minute, nil)
 		require.Error(t, got.err)
 		require.Equal(t, mirrorStatusError, got.status)
 		// Rendered for display, like createOneMirror's failures: the row carries
@@ -1808,7 +1808,7 @@ func TestRemoveOneMirror(t *testing.T) {
 
 	t.Run("a client that could not be built fails only its own row", func(t *testing.T) {
 		t.Parallel()
-		got := removeOneMirror(t.Context(), target, nil, errors.New("no login for that cluster"), nil)
+		got := removeOneMirror(t.Context(), target, nil, errors.New("no login for that cluster"), time.Minute, nil)
 		require.ErrorContains(t, got.err, "no login for that cluster")
 		require.Equal(t, mirrorStatusError, got.status)
 	})

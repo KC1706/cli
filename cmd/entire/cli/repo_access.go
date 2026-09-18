@@ -76,7 +76,16 @@ func newRepoAccessListCmd() *cobra.Command {
 				return err
 			}
 			owner, repo := target.owner, target.repo
-			clusterHost, err := clusterHostForSlug(cmd, cluster)
+			// The catalog fetch and the slug lookup are separated so a failed
+			// round trip is not reported as a bad flag value — --cluster has a
+			// default, so a user who never passed it would be told theirs was
+			// invalid.
+			clusters, err := fetchClusterCatalog(cmd)
+			if err != nil {
+				cmd.SilenceUsage = true
+				return err
+			}
+			clusterHost, err := hostForClusterSlug(clusters, cluster)
 			if err != nil {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid --cluster: %w", err)

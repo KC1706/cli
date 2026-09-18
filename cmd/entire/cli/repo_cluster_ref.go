@@ -74,26 +74,6 @@ func clusterSlugByHost(clusters []coreapi.Cluster) map[string]string {
 	return m
 }
 
-// clusterHostForSlug resolves a catalog slug to the validated public host the
-// cluster-addressed commands dial (runCoreForCluster discovers the core
-// fronting a HOST, and the entire:// clone URL is built from one). The slug is
-// what the user types and what `entire cluster list` prints; the host is an
-// implementation coordinate they should never have to know.
-//
-// It costs one GET /clusters. `mirror add` already paid for that call whenever
-// --cluster was omitted; `mirror remove` and `access list` now pay it too,
-// which is the price of naming clusters one way.
-func clusterHostForSlug(cmd *cobra.Command, slug string) (string, error) {
-	if err := validateClusterSlug(slug); err != nil {
-		return "", err
-	}
-	clusters, err := fetchClusterCatalog(cmd)
-	if err != nil {
-		return "", err
-	}
-	return hostForClusterSlug(clusters, slug)
-}
-
 // hostForClusterSlug is clusterHostForSlug's pure half: the catalog lookup and
 // its error text, unit-testable without a control plane.
 //

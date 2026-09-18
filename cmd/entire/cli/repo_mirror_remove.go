@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
+	"time"
 
 	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/uiform"
@@ -28,48 +29,69 @@ type mirrorPlacement struct {
 	primary bool
 }
 
-// listMirrorPlacements reports where a repo is mirrored today. A GitHub repo's
-// placements come from the pull-gated resolver (anything you could clone), a
-// native repo's from its own primary plus its native-mirror list — the primary
-// is not in that list, so it is joined on.
-func listMirrorPlacements(ctx context.Context, c *coreapi.Client, ref mirrorRepoRef, regions []regionChoice) ([]mirrorPlacement, error) {
+// listMirrorPlacements reports where a repo is mirrored today, and (for a
+// native ref) the repo it resolved, so the caller does not resolve it twice.
+//
+// A GitHub repo's placements come from the pull-gated resolver (anything you
+// could clone), a native repo's from its own primary plus its native-mirror
+// list — the primary is not in that list, so it is joined on.
+//
+// Each placement names its own cluster: the catalog only ENRICHES it with the
+// slug and region. A placement whose cluster the catalog does not list (an
+// unusable publicUrl, or one dropped from the registry) is exactly the one you
+// most need to tear down, so it is listed and removable rather than filtered
+// away — the same choice selectPlacement makes for the clone picker.
+func listMirrorPlacements(ctx context.Context, c *coreapi.Client, ref mirrorRepoRef, regions []regionChoice) ([]mirrorPlacement, *coreapi.Repo, error) {
 	if ref.forge == nativeCloneForge {
 		repo, err := resolveNativeRepo(ctx, c, ref.owner, ref.repo)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		mirrors, err := listNativeMirrors(ctx, c, repo.ID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out := make([]mirrorPlacement, 0, len(mirrors)+1)
 		if primary := repo.ClusterSlug.Or(""); primary != "" {
-			if region, ok := regionBySlug(regions, primary); ok {
-				out = append(out, mirrorPlacement{region: region, status: repo.State.Or("-"), primary: true})
-			}
+			out = append(out, mirrorPlacement{region: regionForSlug(regions, primary), status: repo.State.Or("-"), primary: true})
 		}
 		for _, m := range mirrors {
-			if region, ok := regionBySlug(regions, m.ClusterSlug); ok {
-				out = append(out, mirrorPlacement{region: region, status: string(m.Status)})
-			}
+			out = append(out, mirrorPlacement{region: regionForSlug(regions, m.ClusterSlug), status: string(m.Status)})
 		}
-		return out, nil
+		return out, repo, nil
 	}
 
 	placements, err := resolvePullablePlacements(ctx, c, ref.owner, ref.repo)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make([]mirrorPlacement, 0, len(placements))
 	for _, p := range placements {
-		for _, region := range regions {
-			if strings.EqualFold(region.host, p.ClusterHost) {
-				out = append(out, mirrorPlacement{region: region})
-				break
-			}
+		out = append(out, mirrorPlacement{region: regionForHost(regions, p.ClusterHost)})
+	}
+	return out, nil, nil
+}
+
+// regionForSlug names a cluster the catalog knows, or falls back to the slug
+// alone. The fallback carries no host, which is all a native removal needs
+// (those are addressed by repo ULID and slug).
+func regionForSlug(regions []regionChoice, slug string) regionChoice {
+	if r, ok := regionBySlug(regions, slug); ok {
+		return r
+	}
+	return regionChoice{slug: slug}
+}
+
+// regionForHost is the same for a GitHub placement, which names its cluster by
+// host. The fallback keeps the host — what the delete is addressed at — and
+// uses it as the slug so the placement can still be named on the command line.
+func regionForHost(regions []regionChoice, host string) regionChoice {
+	for _, r := range regions {
+		if strings.EqualFold(r.host, host) {
+			return r
 		}
 	}
-	return out, nil
+	return regionChoice{slug: host, host: host}
 }
 
 // removableMirrorPlacements drops the ones `mirror remove` must not act on.
@@ -144,7 +166,7 @@ func chooseMirrorRemoveRegions(cmd *cobra.Command, ref mirrorRepoRef, placements
 
 // runMirrorRemove is the `repo mirror remove <repo>` body: find where the repo
 // is mirrored, choose which of those to drop, then remove them in parallel.
-func runMirrorRemove(cmd *cobra.Command, repoRef string, clusterSlugs []string) error {
+func runMirrorRemove(cmd *cobra.Command, repoRef string, clusterSlugs []string, timeout time.Duration) error {
 	cmd.SilenceUsage = true
 	ref, err := parseMirrorRepoRef(repoRef)
 	if err != nil {
@@ -167,12 +189,7 @@ func runMirrorRemove(cmd *cobra.Command, repoRef string, clusterSlugs []string) 
 			return lerr
 		}
 		regions = clustersToRegions(out.Clusters)
-		if placements, lerr = listMirrorPlacements(ctx, c, ref, regions); lerr != nil {
-			return lerr
-		}
-		if ref.forge == nativeCloneForge {
-			nativeRepo, lerr = resolveNativeRepo(ctx, c, ref.owner, ref.repo)
-		}
+		placements, nativeRepo, lerr = listMirrorPlacements(ctx, c, ref, regions)
 		return lerr
 	}); err != nil {
 		return err
@@ -188,7 +205,7 @@ func runMirrorRemove(cmd *cobra.Command, repoRef string, clusterSlugs []string) 
 		// which would print a progress block and a headerless table for nothing.
 		return nil
 	}
-	results := removeMirrors(cmd.Context(), cmd.ErrOrStderr(), oneRepoTargets(ref, nativeRepo, chosen))
+	results := removeMirrors(cmd.Context(), cmd.ErrOrStderr(), oneRepoTargets(ref, nativeRepo, chosen), timeout)
 	return reportMirrorRemoveResults(cmd.OutOrStdout(), cmd.ErrOrStderr(), results)
 }
 
@@ -240,7 +257,7 @@ func pickRemoveRegions(ctx context.Context, w io.Writer, placements []mirrorPlac
 // removeMirrors tears down every target in parallel, one result per target in
 // input order — the same shape createMirrors uses, so a batch remove reports
 // like a batch add.
-func removeMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget) []mirrorResult {
+func removeMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget, timeout time.Duration) []mirrorResult {
 	clientByHost := make(map[string]*coreapi.Client)
 	clientErrByHost := make(map[string]error)
 	for _, t := range targets {
@@ -266,17 +283,21 @@ func removeMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget) 
 	prog := newMirrorProgress(errW, labels)
 	prog.start()
 
+	// Bounded like createMirrors: the two are a matched pair, and an unbounded
+	// fan-out would differ only by accident.
 	results := make([]mirrorResult, len(targets))
-	var wg sync.WaitGroup
+	g := new(errgroup.Group)
+	g.SetLimit(mirrorCreateConcurrency)
 	for i, t := range targets {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[i] = removeOneMirror(ctx, t, clientByHost[t.clientHost()], clientErrByHost[t.clientHost()],
+		g.Go(func() error {
+			results[i] = removeOneMirror(ctx, t, clientByHost[t.clientHost()], clientErrByHost[t.clientHost()], timeout,
 				func(status string, final, ok bool) { prog.set(i, status, final, ok) })
-		}()
+			return nil
+		})
 	}
-	wg.Wait()
+	//nolint:errcheck // every goroutine returns nil: removeOneMirror folds each
+	// outcome into its result so one failure cannot cancel the others.
+	_ = g.Wait()
 	prog.stop()
 	return results
 }
@@ -284,7 +305,7 @@ func removeMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget) 
 // removeOneMirror tears down a single placement. Like its create counterpart it
 // never returns an error: every outcome folds into the result so one failure
 // cannot sink the batch.
-func removeOneMirror(ctx context.Context, t mirrorTarget, c *coreapi.Client, clientErr error, report func(status string, final, ok bool)) mirrorResult {
+func removeOneMirror(ctx context.Context, t mirrorTarget, c *coreapi.Client, clientErr error, timeout time.Duration, report func(status string, final, ok bool)) mirrorResult {
 	// report may be nil, as in createOneMirror: a caller that wants the outcome
 	// but not the live progress should not have to supply a no-op.
 	if report == nil {
@@ -295,6 +316,15 @@ func removeOneMirror(ctx context.Context, t mirrorTarget, c *coreapi.Client, cli
 		res.status, res.err = mirrorStatusError, clientErr
 		report(mirrorStatusError, true, false)
 		return res
+	}
+	// Native teardown is asynchronous and waited on, so it needs the same bound
+	// `add` puts on its wait: without one a placement the server never reaps
+	// hangs the command behind a spinner forever. Zero preserves the caller
+	// context, keeping "wait indefinitely" available.
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 	report(mirrorStatusRemoving, false, false)
 
@@ -307,6 +337,11 @@ func removeOneMirror(ctx context.Context, t mirrorTarget, c *coreapi.Client, cli
 		// Teardown is asynchronous: the delete records the intent and the
 		// placement disappears later, so the wait is what makes "removed" true.
 		if err := awaitNativeMirrorRemoved(ctx, c, t.nativeRepo.ID, t.region.slug); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				res.status, res.err = mirrorStatusTimedOut, err
+				report(res.status, true, false)
+				return res
+			}
 			return failedRemoval(&res, err, report)
 		}
 		res.status = mirrorStatusRemoved
