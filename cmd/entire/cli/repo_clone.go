@@ -260,11 +260,15 @@ func resolveNativeCloneURL(ctx context.Context, cmd *cobra.Command, c *coreapi.C
 // slug→host reconstruction the mirror table does (clusterHostBySlug); a slug
 // the catalog can't resolve to a safe host is omitted rather than guessed.
 //
-// The mirror listing is best-effort unless the caller passed a cluster
-// selector: the endpoint 404s on older cores and 503s where native mirroring
-// is not configured, and failing the whole resolution then would regress the
-// home-cluster clone that has always worked. With a selector the placement
-// list IS the answer, so the error surfaces.
+// Both lookups behind the extra placements — the mirror listing and the
+// cluster catalog — are best-effort unless the caller passed a cluster
+// selector: the mirror endpoint 404s on older cores and 503s where native
+// mirroring is not configured, the catalog can be transiently down, and
+// failing the whole resolution on either would regress the home-cluster clone
+// that has always worked. With a selector the placement list IS the answer, so
+// the error surfaces. A done context also surfaces: a cancelled command must
+// fail, not quietly resolve the home cluster and exit 0 (`repo remote url`'s
+// stdout is captured by `$(…)`, so a URL printed after Ctrl+C is acted on).
 func nativePlacements(ctx context.Context, c *coreapi.Client, repo *coreapi.Repo, explicitCluster bool) ([]coreapi.ResolvedPlacement, error) {
 	home := coreapi.ResolvedPlacement{
 		ClusterHost:  strings.TrimSpace(repo.ClusterHost.Or("")),
@@ -273,7 +277,7 @@ func nativePlacements(ctx context.Context, c *coreapi.Client, repo *coreapi.Repo
 	}
 	mirrors, err := c.ListNativeMirrors(ctx, coreapi.ListNativeMirrorsParams{RepoId: repo.ID})
 	if err != nil {
-		if explicitCluster {
+		if explicitCluster || ctx.Err() != nil {
 			return nil, fmt.Errorf("list native mirrors: %w", err)
 		}
 		logging.Debug(ctx, "native-mirror listing failed; resolving the home cluster only", "error", err)
@@ -291,7 +295,11 @@ func nativePlacements(ctx context.Context, c *coreapi.Client, repo *coreapi.Repo
 	}
 	clusters, err := c.ListClusters(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list clusters: %w", err)
+		if explicitCluster || ctx.Err() != nil {
+			return nil, fmt.Errorf("list clusters: %w", err)
+		}
+		logging.Debug(ctx, "cluster catalog fetch failed; resolving the home cluster only", "error", err)
+		return placements, nil
 	}
 	bySlug := make(map[string]coreapi.Cluster, len(clusters.Clusters))
 	for _, cl := range clusters.Clusters {

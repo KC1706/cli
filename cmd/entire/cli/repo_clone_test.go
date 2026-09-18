@@ -342,10 +342,11 @@ const testNativeRepoULID = "01ARZ3NDEKTSV4RRFFQ69G5FBB"
 // their slugs resolve against, and an optional non-200 status for the mirror
 // listing (a legacy or unconfigured core).
 type nativeRepoFixture struct {
-	repo          coreapi.Repo
-	mirrors       []coreapi.NativeMirrorPlacement
-	clusters      []coreapi.Cluster
-	mirrorsStatus int
+	repo           coreapi.Repo
+	mirrors        []coreapi.NativeMirrorPlacement
+	clusters       []coreapi.Cluster
+	mirrorsStatus  int
+	clustersStatus int
 }
 
 // serveNativeRepo fakes the three-call native resolution chain: project by
@@ -384,6 +385,10 @@ func serveNativeRepoFixture(t *testing.T, fx nativeRepoFixture) *coreapi.Client 
 			}
 			body = &coreapi.ListNativeMirrorsOutputBody{NativeMirrors: mirrors}
 		case "/api/v1/clusters":
+			if fx.clustersStatus != 0 {
+				w.WriteHeader(fx.clustersStatus)
+				return
+			}
 			if fx.clusters == nil {
 				t.Errorf("unexpected cluster catalog fetch: fixture has no clusters")
 				w.WriteHeader(http.StatusNotFound)
@@ -544,6 +549,46 @@ func TestResolveNativeCloneURL(t *testing.T) {
 		_, err := resolve(t, c, "aws-us-east-2.entire.io")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "list native mirrors")
+	})
+
+	t.Run("a failed catalog fetch degrades to the home cluster", func(t *testing.T) {
+		t.Parallel()
+		c := serveNativeRepoFixture(t, nativeRepoFixture{
+			repo:           native("aws-ap-southeast-2.entire.io", "/et/paul/dogbark"),
+			mirrors:        []coreapi.NativeMirrorPlacement{readyNativeMirror("aws-us-east-2")},
+			clustersStatus: http.StatusServiceUnavailable,
+		})
+		got, err := resolve(t, c, "")
+		require.NoError(t, err)
+		require.Equal(t, "entire://aws-ap-southeast-2.entire.io/et/paul/dogbark", got)
+	})
+
+	t.Run("a failed catalog fetch surfaces when --cluster asked for a placement", func(t *testing.T) {
+		t.Parallel()
+		c := serveNativeRepoFixture(t, nativeRepoFixture{
+			repo:           native("aws-ap-southeast-2.entire.io", "/et/paul/dogbark"),
+			mirrors:        []coreapi.NativeMirrorPlacement{readyNativeMirror("aws-us-east-2")},
+			clustersStatus: http.StatusServiceUnavailable,
+		})
+		_, err := resolve(t, c, "aws-us-east-2.entire.io")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "list clusters")
+	})
+
+	t.Run("a cancelled context surfaces instead of degrading to the home cluster", func(t *testing.T) {
+		t.Parallel()
+		c := serveNativeRepoFixture(t, nativeRepoFixture{
+			repo: native("aws-ap-southeast-2.entire.io", "/et/paul/dogbark"),
+		})
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		repo := coreapi.Repo{
+			ID:          testNativeRepoULID,
+			ClusterHost: coreapi.NewOptString("aws-ap-southeast-2.entire.io"),
+			Path:        coreapi.NewOptString("/et/paul/dogbark"),
+		}
+		_, err := nativePlacements(ctx, c, &repo, false)
+		require.ErrorIs(t, err, context.Canceled)
 	})
 
 	t.Run("a mirror slug the catalog cannot resolve safely is omitted", func(t *testing.T) {
