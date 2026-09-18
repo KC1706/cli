@@ -23,7 +23,7 @@ func newRepoRemoteURLCmd() *cobra.Command {
 			"pass --cluster to choose non-interactively.",
 		Example: "  entire repo remote url /et/project/example\n" +
 			"  git remote add entire \"$(entire repo remote url /et/project/example)\"\n" +
-			"  entire repo remote url /gh/entirehq/entire-api --cluster aws-us-east-2",
+			"  entire repo remote url /gh/entirehq/entire-api --cluster aws-us-east-2.entire.io",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Set inside RunE, as repo clone does, so cobra still prints usage
@@ -43,7 +43,7 @@ func newRepoRemoteURLCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster slug to use when the repo is mirrored on more than one, as `entire cluster list` prints it")
+	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster host to use when the repo is mirrored on more than one (may belong to another auth context)")
 	return cmd
 }
 

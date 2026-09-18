@@ -132,6 +132,42 @@ func TestAwaitMirrorReady(t *testing.T) {
 }
 
 // TestRepoMirrorAdd_Flags pins the one-shot flags: the wait bound is
+// TestTargetingClusterFlagsTakeAHost pins the one spelling --cluster takes
+// wherever it names a cluster to ACT on. These verbs do not share a flag
+// registration — each declares its own — and `repo remote url` declares one but
+// delegates the logic to repo clone's resolver, so its help drifted to
+// promising a slug the shared resolver then rejected. Nothing caught it,
+// because its behaviour test passed a host.
+//
+// `repo mirror list --cluster` is deliberately absent: it is a server-side
+// filter that takes either spelling, not a target.
+func TestTargetingClusterFlagsTakeAHost(t *testing.T) {
+	t.Parallel()
+	for name, newCmd := range map[string]func() *cobra.Command{
+		"repo mirror add":    newRepoMirrorAddCmd,
+		"repo mirror remove": newRepoMirrorRemoveCmd,
+		"repo access list":   newRepoAccessListCmd,
+		"repo clone":         newRepoCloneCmd,
+		"repo remote use":    newRepoRemoteUseCmd,
+		"repo remote url":    newRepoRemoteURLCmd,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cmd := newCmd()
+			flag := cmd.Flags().Lookup("cluster")
+			require.NotNil(t, flag)
+			require.Contains(t, flag.Usage, "Cluster host", "--cluster names a cluster by its public host")
+			require.NotContains(t, flag.Usage, "slug")
+			for _, line := range strings.Split(cmd.Example, "\n") {
+				if _, after, found := strings.Cut(line, "--cluster "); found {
+					require.Contains(t, strings.Fields(after)[0], ".",
+						"an example must show a host, which a bare slug is not: %s", strings.TrimSpace(line))
+				}
+			}
+		})
+	}
+}
+
 // --timeout and the cluster host is --cluster, not a positional.
 func TestRepoMirrorAdd_Flags(t *testing.T) {
 	t.Parallel()
