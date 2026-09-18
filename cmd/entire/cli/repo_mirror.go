@@ -407,11 +407,20 @@ func qualifyRepoRef(forge, ownerRepo string) string {
 // caller: the placement filter below may only be applied when it did NOT, since
 // the flag would then be both the classifier and the filter.
 func forgeOfEntry(e coreapi.RepoIndexEntry) (forge string, fromProvider bool) {
-	switch e.Provider.Or("") {
-	case repoProviderGitHub:
-		return mirrorCloneForge, true
-	case repoProviderEntire:
-		return nativeCloneForge, true
+	// Get, not Or(""): an ABSENT provider is "the server did not say" and falls
+	// through to the flag below, while a provider this build does not know is a
+	// definite answer of "neither of ours". Collapsing the two let a future
+	// forge's repo be classified by its placement flag and rendered with a
+	// fabricated /gh/ clone URL pointing nowhere.
+	if provider, ok := e.Provider.Get(); ok {
+		switch provider {
+		case repoProviderGitHub:
+			return mirrorCloneForge, true
+		case repoProviderEntire:
+			return nativeCloneForge, true
+		default:
+			return "", true
+		}
 	}
 	// A candidate is a GitHub repo that could be onboarded. It has no provider
 	// and no placements — there is nothing placed yet — so it is recognised by
@@ -441,9 +450,14 @@ func placementServesForge(p coreapi.RepoPlacement, forge string) bool {
 const forgeFilterAll = "all"
 
 // entryServesForge reports whether an entry belongs in a directory filtered to
-// forge.
+// forge. A row whose forge cannot be named is in NO view, "all" included: it
+// has no reference to print and no clone URL that would resolve, so listing it
+// would only invite someone to copy a name nothing accepts.
 func entryServesForge(e coreapi.RepoIndexEntry, forge string) bool {
 	entryForge, _ := forgeOfEntry(e)
+	if entryForge == "" {
+		return false
+	}
 	return forge == forgeFilterAll || entryForge == forge
 }
 

@@ -161,7 +161,12 @@ the commands are always runnable in every build.
   `remote use`, `remote url` and `clone` all choose a placement through the shared
   `selectPlacement` picker, each passing its own `placementPicker` wording. The
   picker matches on the cluster host the caller already resolved and shows
-  slugs, since that is what `--cluster` takes. It renders on stderr when that is
+  slugs, since that is what `--cluster` takes. That selection is **GitHub-only**
+  in `clone` and `remote url`: a native ref there resolves the repo's primary
+  and `--cluster` is refused, so the way to target a native mirror is
+  `remote use --cluster <slug>` or a full `entire://` URL (which both `clone`
+  and `remote url` forward untouched). Teaching those two to select among native
+  placements is unfinished work, not a decision. It renders on stderr when that is
   a terminal and on the controlling
   terminal otherwise (`openPlacementPromptTerminal`), because Bubble Tea fails
   *silently* on a redirected writer — no window size, a 0x0 viewport, and stdin

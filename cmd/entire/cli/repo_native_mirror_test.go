@@ -385,8 +385,23 @@ func TestBuildRepoDir_ForgeFilter(t *testing.T) {
 		require.Equal(t, []string{"/gh/acme/web", "/et/acme/native", "/gh/acme/mkt"}, repoNamesOf(rows))
 	})
 
+	// A provider this build does not know is a definite "neither of ours", so
+	// the row is in no view — not even --forge all. Guessing from the placement
+	// flag would print it as /gh/… with a clone URL that resolves to nothing.
+	t.Run("an unrecognised provider is in no forge's view", func(t *testing.T) {
+		t.Parallel()
+		future := []coreapi.RepoIndexEntry{{
+			FullName: "acme/web", Visibility: "public",
+			Provider:   coreapi.NewOptString("gitlab"),
+			Placements: []coreapi.RepoPlacement{{ClusterSlug: "us", Status: coreapi.RepoPlacementStatusReady, Mirror: true}},
+		}}
+		for _, forge := range []string{mirrorCloneForge, nativeCloneForge, forgeFilterAll} {
+			require.Empty(t, buildRepoDir(future, hosts, forge), "forge %q", forge)
+		}
+	})
+
 	// provider is the field that answers "which forge", but it is optional on
-	// the wire. A row without it falls back to its placements' mirror flag
+	// the wire. A row that OMITS it falls back to its placements' mirror flag
 	// rather than dropping out of every view.
 	t.Run("an entry with no provider falls back to its placement flag", func(t *testing.T) {
 		t.Parallel()

@@ -342,7 +342,7 @@ func runMirrorAddWizard(cmd *cobra.Command, opts mirrorAddOptions) error {
 	// non-interactive form rather than letting huh error obscurely.
 	if !interactive.CanPromptInteractively() {
 		fmt.Fprintln(errW, "The mirror add wizard needs an interactive terminal.")
-		fmt.Fprintln(errW, "Run 'entire repo mirror add <repo> --cluster <host>' to create one non-interactively.")
+		fmt.Fprintln(errW, "Run 'entire repo mirror add <repo> --cluster <slug>' to create one non-interactively.")
 		return NewSilentError(errors.New("not an interactive terminal"))
 	}
 
