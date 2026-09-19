@@ -391,14 +391,9 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 			continue
 		}
 
-		// Per-session agent metadata, falling back to the checkpoint's own agent.
-		// Older checkpoints carry the agent only at the top level, and skipping
-		// them turned a whole multi-session restore into a no-op — the most
-		// common of the six skip reasons, not a rare one.
+		// Per-session metadata only — point.Agent is deliberately not a fallback
+		// here; see classifySessionsForRestore for why.
 		sessionAgentName := content.Metadata.Agent
-		if sessionAgentName == "" {
-			sessionAgentName = point.Agent
-		}
 		if sessionAgentName == "" {
 			fmt.Fprintf(errW, "  Warning: session %d (%s) has no agent metadata, skipping (cannot determine target directory)\n", i, sessionID)
 			continue
@@ -626,6 +621,19 @@ type SessionRestoreInfo struct {
 // about each session, including whether local logs have newer timestamps.
 // repoRoot is used to compute per-session agent directories.
 // Sessions without agent metadata are skipped (cannot determine target directory).
+//
+// That skip is why RestoreLogsOnly must skip the same sessions rather than fall
+// back to point.Agent, which looks like the obvious fix and was briefly made.
+// This function is what populates skipExisting, so a session it skipped and
+// RestoreLogsOnly restored would be written without --force over a newer local
+// transcript holding uncheckpointed work: existence checking and writing have to
+// resolve the same destination, and a fallback applied to one of them guarantees
+// they do not. Independently, the checkpoint-level agent is one session's rather
+// than checkpoint-wide provenance — both stores set it as `info.Agent =
+// sessionMetadata.Agent` from the last session read — so on a multi-agent
+// checkpoint that fallback writes an untyped session into another agent's store.
+// The symptom it was reaching for, a restore that did nothing and said nothing,
+// is fixed in restoreResumeSessions instead.
 func (s *ManualCommitStrategy) classifySessionsForRestore(ctx context.Context, repoRoot string, store cpkg.SessionReader, checkpointID id.CheckpointID, summary *cpkg.CheckpointSummary) []SessionRestoreInfo {
 	var sessions []SessionRestoreInfo
 

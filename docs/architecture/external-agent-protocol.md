@@ -524,16 +524,13 @@ Used as input to `write-session` and output from `read-session`.
 
 ### session_ref constraints
 
-`session_ref` stays agent-defined: a plugin backed by a database may return an opaque key rather than a path, and the CLI forwards such a value to `write-session` unchanged. Two rules apply to every `session_ref` regardless of shape, and a third applies only to the ones that are unambiguously filesystem paths.
+`session_ref` stays agent-defined: a plugin backed by a database may return an opaque key rather than a path, and the CLI forwards such a value to `write-session` unchanged. Which checks apply depends on the shape of the value, and one of them also depends on whether `repo_path` was supplied.
 
-Always:
+**A reference that is absolute, or that carries a volume name** (`/home/u/.agentx/sessions/abc.jsonl`, `C:\Users\u\...`) is treated as a filesystem path. It must contain no `.` or `..` component — always, whether or not `repo_path` is set. When `repo_path` IS set, it must additionally resolve inside the directory the plugin itself reported from `get-session-dir`; without `repo_path` there is no session directory to resolve against, so that containment check does not run and the reference is forwarded.
 
-- It must not be rooted (`/sessions/abc.jsonl` with no volume).
-- Once cleaned it must not escape its own base, so `../outside.jsonl` and `nested/../../outside.jsonl` are refused. An opaque key that merely *contains* a dot segment without escaping, such as `tenant/../session-key`, is forwarded as given.
+**Any other reference** is treated as an agent-defined key. It must not be rooted, and once cleaned it must not escape its own base, so `../outside.jsonl` and `nested/../../outside.jsonl` are refused. A key that merely *contains* a dot segment without escaping, such as `tenant/../session-key`, is forwarded as given. Note that the rooted check is reachable only on Windows: on Unix a leading separator makes the reference absolute, so it takes the filesystem branch above.
 
-When the value is absolute or carries a volume name, the CLI treats it as a filesystem path and additionally requires that it contain no `.` or `..` component, and that it resolve inside the directory the plugin itself reported from `get-session-dir`. A ref that resolves outside that directory is refused before `write-session` is spawned.
-
-This is a preflight, not a sandbox. The plugin runs as its own process and can write wherever its own permissions allow; the check exists so the CLI does not *hand* it a path that leaves the store it named.
+This is a preflight, not a sandbox. The plugin runs as its own process and can write wherever its own permissions allow; the check exists so the CLI does not *hand* it a reference that leaves the store the plugin named.
 
 ### Event Object
 

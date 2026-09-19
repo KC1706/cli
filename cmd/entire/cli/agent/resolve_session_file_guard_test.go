@@ -34,6 +34,12 @@ var resolveSessionFileCallers = map[string]string{
 	// to the plugin's implementation and resolves nothing of its own, so it is
 	// the method rather than a caller of it.
 	"cmd/entire/cli/agent/external/capabilities.go": "wrappedAgent forwards the call to the external agent; it is an implementation, not a caller",
+
+	// A test helper, in a package with no _test.go suffix for the exclusion to
+	// catch. It resolves an ID the harness itself wrote into a temp repo, so
+	// there is no untrusted input; listed rather than excluded by path so that a
+	// production caller added under e2e/ cannot hide behind the exclusion.
+	"e2e/testutil/session_paths.go": "e2e harness resolving an ID it generated itself, against a temp repo",
 }
 
 // TestResolveSessionFileCallersAreSanctioned fails the build when a new caller
@@ -52,9 +58,12 @@ func TestResolveSessionFileCallersAreSanctioned(t *testing.T) {
 	// testutil.GitGrepGuard owns --untracked, --no-color and the repo-selector
 	// scrubbing, and explains why each is load-bearing for a guard like this.
 	// The pathspec is restricted to *.go so an unparseable path can be fatal
-	// below rather than skipped.
+	// below rather than skipped, and spans EVERY Go package rather than cmd/:
+	// scoped to cmd/**/*.go it could not see e2e/testutil, which had been
+	// calling the resolver the whole time. A guard that cannot see a caller is
+	// not a guard.
 	out := testutil.GitGrepGuard(t, repoRoot, "-l", "-E", "--", resolveSessionFilePattern,
-		"--", ":(glob)cmd/**/*.go", ":(exclude,glob)**/*_test.go")
+		"--", ":(glob)**/*.go", ":(exclude,glob)**/*_test.go")
 
 	found := map[string]bool{}
 	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
