@@ -754,12 +754,14 @@ func newCoreServer(t *testing.T) (*httptest.Server, *coreRecorder) {
 	return srv, rec
 }
 
-// isolateLogoutState points config and keyring at temp dirs.
+// isolateLogoutState points config and keyring at temp dirs. ENTIRE_TOKEN is
+// not neutralised here: TestMain isolates it by absence, and setting it blank
+// instead means "set but blank", which ParseEnvToken rejects for every command
+// a seeded context is handed to.
 func isolateLogoutState(t *testing.T) {
 	t.Helper()
 	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
 	t.Setenv(contexts.EnvContextVar, "")
-	t.Setenv(auth.EnvTokenVar, "")
 	t.Cleanup(tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json")))
 }
 
