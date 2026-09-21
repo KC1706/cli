@@ -31,11 +31,12 @@ func NewAuthenticatedAPIClient(ctx context.Context, insecureHTTP bool) (*api.Cli
 		}
 		return nil, fmt.Errorf("resolve API token: %w", err)
 	}
-	if !insecureHTTP {
-		if err := api.RequireSecureURL(target.BaseURL); err != nil {
-			return nil, fmt.Errorf("base URL check: %w", err)
-		}
-	}
+	// No second scheme check: requireSecureDataOverride above already rejected an
+	// http ENTIRE_API_BASE_URL, and every other value target.BaseURL can hold is
+	// built by auth.dataBaseURLForCore as "https://" + site. Checking again after
+	// the credential is in hand would be too late to matter anyway — the point of
+	// the gate is to run before discovery and refresh dial the host.
+	// TestNewAuthenticatedAPIClient_RejectsInsecureOverrideBeforeResolving pins it.
 	return api.NewClientWithBaseURL(target.Token, target.BaseURL), nil
 }
 
