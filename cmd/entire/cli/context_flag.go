@@ -11,6 +11,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// contextFlagName is the root's persistent identity selector. Named so the
+// commands that read it back (logout refuses it) cannot drift from the
+// registration below.
+const contextFlagName = "context"
+
 // contextFlagValue applies --context to the process-wide selection as pflag
 // parses it.
 //
@@ -137,7 +142,7 @@ func wrapExportErr(err error) error {
 // that path, not a live leak, which is also why the in-process override is
 // left as it is: nothing resolves an identity again before the process exits.
 func validateContextFlag(cmd *cobra.Command) error {
-	f := cmd.Flags().Lookup("context")
+	f := cmd.Flags().Lookup(contextFlagName)
 	if f == nil || strings.TrimSpace(f.Value.String()) == "" {
 		return nil
 	}
@@ -165,9 +170,9 @@ func addContextFlag(cmd *cobra.Command) {
 	// The back-quoted word is pflag's value placeholder, so this renders as
 	// `--context name`. Any other back-quoted span here (e.g. around a command to
 	// run) would be silently hijacked as the placeholder instead.
-	cmd.PersistentFlags().Var(&contextFlagValue{}, "context",
+	cmd.PersistentFlags().Var(&contextFlagValue{}, contextFlagName,
 		"Act as this saved login `name` for this command only — including the git and agent processes it spawns — instead of the active context (entire auth contexts lists them)")
-	if err := cmd.RegisterFlagCompletionFunc("context", completeContextFlag); err != nil {
+	if err := cmd.RegisterFlagCompletionFunc(contextFlagName, completeContextFlag); err != nil {
 		panic("register --context completion: " + err.Error())
 	}
 }
