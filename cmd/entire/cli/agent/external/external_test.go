@@ -300,14 +300,14 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 		},
 		{
 			name:    "relative parent traversal",
-			wantErr: agent.ErrOutsideSessionStore,
+			wantErr: agent.ErrUnsafeSessionName,
 			sessionRef: func(_ *testing.T, _, _ string) string {
 				return filepath.Join("..", "outside.jsonl")
 			},
 		},
 		{
 			name:    "relative nested traversal",
-			wantErr: agent.ErrOutsideSessionStore,
+			wantErr: agent.ErrUnsafeSessionName,
 			sessionRef: func(_ *testing.T, _, _ string) string {
 				return filepath.FromSlash("nested/../../outside.jsonl")
 			},
@@ -337,7 +337,7 @@ func TestWriteSession_RejectsUnsafeReferenceBeforeSubprocess(t *testing.T) {
 		},
 		{
 			name:    "symlink plus parent traversal",
-			wantErr: agent.ErrOutsideSessionStore,
+			wantErr: agent.ErrUnsafeSessionName,
 			sessionRef: func(t *testing.T, sessionDir, outsideDir string) string {
 				t.Helper()
 				targetDir := filepath.Join(outsideDir, "child")

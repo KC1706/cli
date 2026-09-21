@@ -140,6 +140,11 @@ func TestSessionStore_FollowsSymlinkedStoreRoot(t *testing.T) {
 	// spellings are one directory and both must be accepted.
 	require.NoError(t, store.ValidateExternalWriteRef(filepath.Join(realStore, "session.jsonl")))
 
+	// Several missing components, so the resolve-the-deepest-existing-prefix walk
+	// has to strip more than the leaf. A version of it that stripped only the
+	// leaf passes every other assertion here.
+	require.NoError(t, store.ValidateExternalWriteRef(filepath.Join(realStore, "a", "b", "session.jsonl")))
+
 	// Still outside is still refused, resolved or not.
 	outside := t.TempDir()
 	require.Error(t, store.ValidateExternalWriteRef(filepath.Join(outside, "session.jsonl")))
@@ -275,4 +280,47 @@ func TestSessionStore_ProbingManyDirectoriesRetainsNoDescriptors(t *testing.T) {
 	// this guards produced exactly `candidates` extra descriptors.
 	require.Less(t, countFDs()-before, 16,
 		"probing %d candidate directories must not retain a descriptor per directory", candidates)
+}
+
+// The store itself may not exist yet — an external plugin is allowed to create
+// it — so the walk has to resolve a symlinked ANCESTOR while the store and the
+// reference below it are both still missing.
+func TestSessionStore_FollowsSymlinkedAncestorOfAMissingStore(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	realParent := filepath.Join(base, "real-parent")
+	require.NoError(t, os.MkdirAll(realParent, 0o700))
+	linkedParent := filepath.Join(base, "linked-parent")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	storeDir := filepath.Join(linkedParent, "missing-store")
+	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
+	require.NoError(t, err)
+
+	// The plugin's own spelling, and the same location through the link's target.
+	require.NoError(t, store.ValidateExternalWriteRef(filepath.Join(storeDir, "session.jsonl")))
+	require.NoError(t, store.ValidateExternalWriteRef(filepath.Join(realParent, "missing-store", "session.jsonl")))
+
+	// A sibling of the missing store is still outside it.
+	require.Error(t, store.ValidateExternalWriteRef(filepath.Join(realParent, "other-store", "session.jsonl")))
+}
+
+// Nested directories inherit the store root's 0700 rather than 0750: they hold
+// the same transcripts, and Copilot, Cursor and Codex all write into them.
+func TestSessionStore_CreatesNestedDirectories0700(t *testing.T) {
+	t.Parallel()
+
+	storeDir := filepath.Join(t.TempDir(), "store")
+	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
+	require.NoError(t, err)
+	require.NoError(t, store.WriteFile("nested/deeper/session.jsonl", []byte("hi\n"), 0o600))
+
+	for _, dir := range []string{storeDir, filepath.Join(storeDir, "nested"), filepath.Join(storeDir, "nested", "deeper")} {
+		info, err := os.Stat(dir)
+		require.NoError(t, err, dir)
+		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), dir)
+	}
 }

@@ -161,7 +161,8 @@ func (s *SessionStore) SessionFile(agentSessionID string) (name, absPath string,
 // store is accepted as-is.
 func (s *SessionStore) Name(p string) (string, error) {
 	if p == "" {
-		return "", fmt.Errorf("%w: empty path", ErrOutsideSessionStore)
+		// Malformed, not outside: nothing was compared against the store.
+		return "", fmt.Errorf("%w: empty path", ErrUnsafeSessionName)
 	}
 	// VolumeName alongside IsAbs, the pairing validation.ValidateSessionID and
 	// gitrepo's alternates checks already use. A Windows drive-relative path
@@ -212,6 +213,12 @@ func SessionRefIsFilesystemPath(ref string) bool {
 // given. Two rules still apply to it: it must not be rooted, and it must not
 // lexically escape its own base.
 //
+// Every rule here is decided without a session store, so every failure reports
+// ErrUnsafeSessionName and never ErrOutsideSessionStore: `<store>/./s.jsonl`
+// cleans to a file INSIDE the store, and a rooted reference was compared
+// against nothing at all. Containment is ValidateExternalWriteRef's answer to
+// give.
+//
 // Deliberately independent of RepoPath. The store-backed half needs a repo to
 // resolve a session directory; these rules do not, and gating them on a field
 // both current callers happen to set is a check that disappears for the next
@@ -225,16 +232,16 @@ func ValidateExternalSessionRef(ref string) (filesystemPath bool, err error) {
 		// normalizes it, so it is refused rather than cleaned away here.
 		for _, component := range strings.Split(filepath.ToSlash(ref), "/") {
 			if component == "." || component == ".." {
-				return false, fmt.Errorf("%w: %s contains a dot path component", ErrOutsideSessionStore, ref)
+				return false, fmt.Errorf("%w: %s contains a dot path component", ErrUnsafeSessionName, ref)
 			}
 		}
 		return true, nil
 	}
 	if os.IsPathSeparator(ref[0]) {
-		return false, fmt.Errorf("%w: %s is rooted", ErrOutsideSessionStore, ref)
+		return false, fmt.Errorf("%w: %s is rooted", ErrUnsafeSessionName, ref)
 	}
 	if relativeNameEscapes(cleanRelativeName(ref)) {
-		return false, fmt.Errorf("%w: %s escapes its relative base", ErrOutsideSessionStore, ref)
+		return false, fmt.Errorf("%w: %s escapes its relative base", ErrUnsafeSessionName, ref)
 	}
 	return false, nil
 }
@@ -266,7 +273,14 @@ func (s *SessionStore) ValidateExternalWriteRef(ref string) error {
 }
 
 // nameAcrossSymlinks retries Name with the store and the reference both
-// resolved. It reports false when either cannot be resolved, so the caller
+// resolved.
+//
+// Used by the external preflight only. The built-in write path (WriteSessionFile,
+// sessionStoreForWrite) compares lexically and needs no retry because there is
+// only one speller: its SessionRef is derived from the same GetSessionDir
+// result the store was opened with. An external plugin is a separate program
+// that reports its directory and returns its reference independently, which is
+// what puts two spellings of one directory in play. It reports false when either cannot be resolved, so the caller
 // keeps the lexical answer rather than trading a definite refusal for an
 // unknown.
 func (s *SessionStore) nameAcrossSymlinks(ref string) (string, bool) {
@@ -382,7 +396,7 @@ func (s *SessionStore) WriteFile(name string, data []byte, perm os.FileMode) err
 	}
 	defer root.Close()
 	if dir := filepath.ToSlash(filepath.Dir(filepath.FromSlash(name))); dir != "." {
-		if err := osroot.MkdirAllNoSymlink(root, dir, 0o750); err != nil {
+		if err := osroot.MkdirAllNoSymlink(root, dir, 0o700); err != nil {
 			return fmt.Errorf("create session directory: %w", err)
 		}
 	}
