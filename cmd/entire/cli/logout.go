@@ -215,17 +215,15 @@ func runLogout(ctx context.Context, outW, errW io.Writer, deps logoutDeps) error
 	}
 
 	removed, failed := 0, 0
-	// interrupted is the cancellation that stopped the sweep, and remaining
-	// counts the entries it never got to (the current one included).
+	// interrupted is the cancellation that stopped the sweep, if any.
 	var interrupted error
-	remaining := 0
-	for i, c := range all {
+	for _, c := range all {
 		// Stop rather than delete the rest of the credentials without
 		// revoking them: a Ctrl-C would otherwise finish logout's
 		// destructive half and skip its protective half, faster than not
 		// interrupting at all.
 		if err := ctx.Err(); err != nil {
-			interrupted, remaining = err, len(all)-i
+			interrupted = err
 			break
 		}
 		if c == nil || c.Name == "" {
@@ -244,7 +242,7 @@ func runLogout(ctx context.Context, outW, errW io.Writer, deps logoutDeps) error
 		// per-login deadline does not cancel ctx, so a hung login server
 		// still gets removed locally.
 		if err := ctx.Err(); err != nil {
-			interrupted, remaining = err, len(all)-i
+			interrupted = err
 			break
 		}
 		if rerr := deps.removeContext(c.Name); rerr != nil {
@@ -258,19 +256,23 @@ func runLogout(ctx context.Context, outW, errW io.Writer, deps logoutDeps) error
 	if removed > 0 {
 		fmt.Fprintf(outW, "Logged out of %d saved login(s).\n", removed)
 	}
-	if interrupted != nil {
-		fmt.Fprintf(errW, "Interrupted: %d saved login(s) still on this machine; run `entire logout` again.\n", remaining)
-	}
+
+	var errs []error
 	if failed > 0 {
-		return fmt.Errorf("failed to remove %d saved login(s)", failed)
+		errs = append(errs, fmt.Errorf("failed to remove %d saved login(s)", failed))
 	}
 	if interrupted != nil {
-		// Wrapping the cancellation is what lets main.go recognise a
-		// signalled abort and re-raise that signal (exit 130/143) instead of
-		// printing "context canceled" as a failure.
-		return fmt.Errorf("logout interrupted: %w", interrupted)
+		// Everything the sweep did not remove, not just the entries it never
+		// reached: a login whose removal failed and a malformed entry it
+		// skipped are both still on the machine and still a retry's problem.
+		fmt.Fprintf(errW, "Interrupted: %d saved login(s) still on this machine; run `entire logout` again.\n", len(all)-removed)
+		errs = append(errs, fmt.Errorf("logout interrupted: %w", interrupted))
 	}
-	return nil
+	// Joined rather than ranked: main.go re-raises the signal only while
+	// errors.Is(err, context.Canceled) holds, so a removal failure earlier in
+	// the sweep must not demote an interrupt to an ordinary exit 1 — and the
+	// failure still has to reach the user.
+	return errors.Join(errs...)
 }
 
 // revokeLogin ends c's session(s) server-side, warning on failure.

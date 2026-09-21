@@ -526,6 +526,54 @@ func TestRunLogout_CancelMidSweepStopsAndKeepsTheInterruptedLogin(t *testing.T) 
 	}
 }
 
+// A removal failure and an interrupt in the same sweep are both reported:
+// the interrupt must stay visible through errors.Is so main.go re-raises the
+// signal rather than exiting 1 on the removal failure, and the count left
+// behind must include the login that failed to go.
+func TestRunLogout_RemoveFailureAndInterruptAreBothReported(t *testing.T) {
+	t.Parallel()
+
+	const bURL = "https://b.auth.entire.io"
+	provider := makeLogoutContexts(
+		&contexts.Context{Name: "a", CoreURL: "https://a.auth.entire.io"},
+		&contexts.Context{Name: "b", CoreURL: bURL},
+		&contexts.Context{Name: "c", CoreURL: "https://c.auth.entire.io"},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	revoke := func(_ context.Context, coreURL, _ string) error {
+		if coreURL == bURL {
+			cancel() // Ctrl-C, one login after the failed removal
+			return context.Canceled
+		}
+		return nil
+	}
+	remove := func(name string) error {
+		if name == "a" {
+			return errors.New("keyring locked")
+		}
+		return nil
+	}
+
+	var out, errOut bytes.Buffer
+	err := runLogout(ctx, &out, &errOut, unitDeps(provider, freshBearer(), revoke, remove))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the interrupt to survive the removal failure", err)
+	}
+	if !strings.Contains(err.Error(), "failed to remove 1 saved login(s)") {
+		t.Fatalf("err = %v, want the removal failure reported too", err)
+	}
+	// a stayed (removal failed), b and c were never removed.
+	if !strings.Contains(errOut.String(), "3 saved login(s) still on this machine") {
+		t.Fatalf("stderr = %q, want the failed removal counted as still present", errOut.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("stdout = %q, want no logged-out claim", out.String())
+	}
+}
+
 func TestRunLogout_RemoveFailureWarnsAndFails(t *testing.T) {
 	t.Parallel()
 
