@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entireio/cli/internal/coreapi"
+	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 )
 
 func TestRepoRemoteURL_Local(t *testing.T) {
@@ -99,7 +102,10 @@ func TestRepoRemoteURL_Mirror(t *testing.T) {
 		want, wantErr string
 	}{
 		{"single", []string{"aws-us-east-2.entire.io"}, "", "entire://aws-us-east-2.entire.io/gh/owner/repo\n", ""},
-		{"multiple", []string{"aws-us-east-2.entire.io", "eu-west-1.entire.io"}, "", "", "pass --cluster"},
+		// Every GitHub mirror set includes the default cluster, so a run with no
+		// terminal resolves it rather than demanding --cluster.
+		{"multiple", []string{"eu-west-1.entire.io", defaultClusterHost}, "", "entire://" + defaultClusterHost + "/gh/owner/repo\n", ""},
+		{"multiple without the default cluster", []string{"eu-west-1.entire.io", "aws-ap-south-1.entire.io"}, "", "", "pass --cluster"},
 		// --cluster names the cluster host, which is both what the command dials
 		// and what lands in the URL.
 		{"explicit cluster", []string{"aws-us-east-2.entire.io", "eu-west-1.entire.io"}, "eu-west-1.entire.io", "entire://eu-west-1.entire.io/gh/owner/repo\n", ""},
@@ -137,6 +143,72 @@ func TestRepoRemoteURL_Mirror(t *testing.T) {
 			require.Equal(t, tc.want, out)
 		})
 	}
+}
+
+// TestRepoRemoteURL_UnknownClusterReadsTheSameOnBothForges pins the one
+// message a mistyped --cluster produces, whichever forge the ref names. The
+// /gh/ path dials the named cluster before looking anything up, so that it can
+// see mirrors held in another federation; an unreachable host used to surface
+// that dial's DNS failure while the /et/ path — which lists from the active
+// context — answered with the repo's actual clusters. Same mistake, same
+// answer now.
+//
+// Not parallel: swaps the package-global activeCoreClient/clusterCoreClient.
+func TestRepoRemoteURL_UnknownClusterReadsTheSameOnBothForges(t *testing.T) {
+	const unknown = "wrongcluster"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		assert.Equal(t, "/api/v1/mirrors/placements", r.URL.Path)
+		assert.NoError(t, printJSON(w, &coreapi.ResolvePlacementsOutputBody{Placements: []coreapi.ResolvedPlacement{
+			{ClusterHost: defaultClusterHost},
+			{ClusterHost: "aws-eu-central-1.entire.io"},
+		}}))
+	}))
+	t.Cleanup(srv.Close)
+
+	// No cluster answers on the typo'd host. ErrUnreachable is the sentinel
+	// discovery really wraps a transport failure in, and the only one the
+	// fallback keys on, so the fake has to carry it too.
+	prev := clusterCoreClient
+	clusterCoreClient = func(_ context.Context, host string) (*coreapi.Client, error) {
+		require.Equal(t, unknown, host)
+		return nil, fmt.Errorf("%w: lookup %s: no such host", clusterdiscovery.ErrUnreachable, host)
+	}
+	t.Cleanup(func() { clusterCoreClient = prev })
+
+	_, _, err := runCoreCmd(t, newRepoRemoteURLCmd, srv.URL, "/gh/owner/repo", "--cluster", unknown)
+	require.ErrorContains(t, err, `repo is not mirrored on "`+unknown+`"`)
+	require.Contains(t, err.Error(), defaultClusterHost, "the answer names the clusters the repo is actually on")
+	require.NotContains(t, err.Error(), "no such host", "the dial failure is a debug detail, not the user's answer")
+}
+
+// TestRepoRemoteURL_ReachableClusterKeepsItsOwnError is the other half of the
+// unknown-cluster rule. Only an unreachable host may be answered with the
+// active context's placement list; a cluster that exists but rejects the
+// selected login is mirroring the repo perfectly well, so replacing its
+// "pick another context" instruction with "not mirrored" would state the
+// opposite of the truth and strand the user one flag away from success.
+//
+// Not parallel: swaps the package-global activeCoreClient/clusterCoreClient.
+func TestRepoRemoteURL_ReachableClusterKeepsItsOwnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		assert.NoError(t, printJSON(w, &coreapi.ResolvePlacementsOutputBody{Placements: []coreapi.ResolvedPlacement{
+			{ClusterHost: defaultClusterHost},
+		}}))
+	}))
+	t.Cleanup(srv.Close)
+
+	prev := clusterCoreClient
+	clusterCoreClient = func(context.Context, string) (*coreapi.Client, error) {
+		return nil, errors.New("cluster other.example does not accept the login selected by --context")
+	}
+	t.Cleanup(func() { clusterCoreClient = prev })
+
+	_, _, err := runCoreCmd(t, newRepoRemoteURLCmd, srv.URL, "/gh/owner/repo", "--cluster", "other.example")
+	require.ErrorContains(t, err, "does not accept the login")
+	require.NotContains(t, err.Error(), "not mirrored")
 }
 
 // TestRepoRemoteURL_PickerKeepsStdoutClean is the regression test for the

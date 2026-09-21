@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/internal/coreapi"
+	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 )
 
 // mirrorCloneRefRe parses the clone-ref shape `entire repo clone` accepts:
@@ -241,7 +243,9 @@ func resolveNativeCloneURL(ctx context.Context, cmd *cobra.Command, c *coreapi.C
 	if err != nil {
 		return "", err
 	}
-	chosen, err := selectPlacement(cmd, placements, clusterSel, picker)
+	// The home cluster is the repo's data primary, so it is what a run with no
+	// terminal resolves to.
+	chosen, err := selectPlacement(cmd, placements, clusterSel, strings.TrimSpace(repo.ClusterHost.Or("")), picker)
 	if err != nil {
 		return "", err
 	}
@@ -481,8 +485,8 @@ func newRepoCloneCmd() *cobra.Command {
 			"Either ref looks up where the repo is readable — a native repo's home " +
 			"cluster and its ready native mirrors, or a GitHub repo's mirror " +
 			"clusters. On a single cluster it clones directly; on more than one, it " +
-			"prompts you to pick which to clone from (or pass --cluster to choose " +
-			"non-interactively).\n\n" +
+			"prompts you to pick which to clone from, and without a terminal it " +
+			"uses the repo's primary cluster. Pass --cluster to choose either way.\n\n" +
 			"A full `entire://` URL already names the cluster, so it's passed straight " +
 			"through to `git clone` with no lookup (and --cluster is ignored). The " +
 			"optional [target-dir] is passed through to `git clone` either way.",
@@ -603,16 +607,30 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 	// authenticated with the matching local context, the same path
 	// `mirror add <repo> --cluster <host>` uses — so the lookup resolves against
 	// the right federation. With no --cluster, list from the active context.
-	runWithCore := runCore
 	if cluster != "" {
 		if err := validateClusterHost(cluster); err != nil {
 			return "", fmt.Errorf("invalid --cluster: %w", err)
 		}
-		runWithCore = func(cmd *cobra.Command, fn func(context.Context, *coreapi.Client) error) error {
-			return runCoreForCluster(cmd, cluster, fn)
+		if err := runCoreForCluster(cmd, cluster, lister); err != nil {
+			// ErrUnreachable and nothing else: the host parses but no cluster
+			// answered on it, so it is a typo rather than a federation we
+			// failed to reach. Listing from the active context then lets
+			// selectPlacement name the clusters the repo IS on — the answer
+			// the /et/ path already gives for the same mistake — with the dial
+			// failure left at debug. Every other discovery error is about a
+			// cluster that does exist (no login for it, no trusted issuers, a
+			// 403 from the listing) and says something the user must act on,
+			// so it surfaces unchanged; reporting "not mirrored" for a mirror
+			// that is really there would be a lie.
+			if !errors.Is(err, clusterdiscovery.ErrUnreachable) {
+				return "", err
+			}
+			logging.Debug(cmd.Context(), "cluster host is unreachable; listing placements from the active context", "cluster", cluster, "error", err)
+			if fallbackErr := runCore(cmd, lister); fallbackErr != nil {
+				return "", err
+			}
 		}
-	}
-	if err := runWithCore(cmd, lister); err != nil {
+	} else if err := runCore(cmd, lister); err != nil {
 		return "", err
 	}
 
@@ -620,7 +638,10 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 		return "", fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror add /gh/%s/%s' to onboard it", owner, repo, owner, repo)
 	}
 
-	chosen, err := selectPlacement(cmd, placements, cluster, picker)
+	// Onboarding a GitHub repo always places it on defaultClusterHost, so it is
+	// the one placement every mirror set has in common and the run with no
+	// terminal resolves it.
+	chosen, err := selectPlacement(cmd, placements, cluster, defaultClusterHost, picker)
 	if err != nil {
 		return "", err
 	}
@@ -756,9 +777,14 @@ var openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
 // selectPlacement resolves which mirror placement a verb should act on. With one
 // placement it returns it directly. With an explicit clusterSel it picks the
 // matching one (or errors listing the available hosts). With more than one and no
-// selector it prompts interactively, failing fast with a p.selector pointer when
-// there's no terminal.
-func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterSel string, p placementPicker) (coreapi.ResolvedPlacement, error) {
+// selector it prompts interactively, and where there is no terminal it resolves
+// defaultHost — the repo's primary cluster, which the caller names because the
+// two forges hold it in different places (a native repo's home cluster comes
+// back on the repo itself; a GitHub repo's mirror set always includes
+// defaultClusterHost). A script therefore gets the primary rather than a
+// refusal, and only a repo whose placements don't include it has to be told to
+// pass p.selector.
+func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterSel, defaultHost string, p placementPicker) (coreapi.ResolvedPlacement, error) {
 	// Dedupe by cluster host: one placement per cluster is what a caller acts on,
 	// and the same host appearing twice would only confuse the picker. Key on the
 	// case-folded host — DNS is case-insensitive, so a selector value differing
@@ -789,7 +815,10 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 
 	if !interactive.CanPromptInteractively() {
-		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is mirrored on %d clusters; pass %s to choose one of: %s", len(hosts), p.selector, strings.Join(hosts, ", "))
+		if match, ok := byHost[strings.ToLower(strings.TrimSpace(defaultHost))]; ok {
+			return match, nil
+		}
+		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is on %d clusters and none of them is %s; pass %s to choose one of: %s", len(hosts), defaultHost, p.selector, strings.Join(hosts, ", "))
 	}
 
 	options := make([]huh.Option[string], len(hosts))

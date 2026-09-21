@@ -514,7 +514,14 @@ func newRepoRemoteUseCmd() *cobra.Command {
 				return fmt.Errorf("%s has no cluster you can fetch from; create a mirror first:\n  entire repo mirror add %s", qualified, qualified)
 			}
 
-			chosen, err := selectPlacement(cmd, placements, clusterHost, placementPicker{
+			// The repo's primary cluster, which a run with no terminal repoints
+			// to: a native repo carries its home cluster, and every GitHub
+			// mirror set includes defaultClusterHost.
+			defaultHost := defaultClusterHost
+			if nativeRepo != nil {
+				defaultHost = strings.TrimSpace(nativeRepo.ClusterHost.Or(""))
+			}
+			chosen, err := selectPlacement(cmd, placements, clusterHost, defaultHost, placementPicker{
 				selector: clusterSelectorFlag,
 				title:    qualified + " is on more than one cluster — pick the one to use",
 				action:   "Remote update",
