@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/spf13/cobra"
 	flag "github.com/spf13/pflag"
@@ -335,6 +336,10 @@ command tree so it always matches this binary. With no arguments it prints a
 high-level map of when to use entire and which subcommand; pass a command path
 (e.g. "agent-help checkpoint") to see that command's exact, current flags.`,
 		RunE: func(c *cobra.Command, args []string) error {
+			// The enablement probe below authenticates as the selected login, but
+			// nothing here acts on the user's behalf, and this output is read by an
+			// agent — so resolve it without the "Using context 'x'." notice.
+			auth.SilenceContextNotice()
 			// Resolve the origin remote once and derive both the repo line and the
 			// trails-enablement check from it (avoids two git subprocesses per run).
 			repoLine, trailsEnabled := agentHelpRepoContext(c.Context())
