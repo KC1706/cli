@@ -130,11 +130,12 @@ func runRecap(ctx context.Context, w, errW io.Writer, f *recapFlags) error {
 	client, repoScope, repoName, err := newRecapClient(ctx, f.insecureHTTP)
 	if err != nil {
 		if errors.Is(err, api.ErrInsecureHTTP) {
-			// Name the variable and its value: the generic error says only that
-			// *some* base URL is http, which sends the reader looking for a setting
-			// they may not know they have. newRecapClient rejects the override
-			// before resolving anything, so an http URL here is always this one.
-			fmt.Fprintf(errW, "%s is set to an insecure http:// URL (%s). Use https:// for production, or pass --insecure-http-auth for local dev.\n", api.BaseURLEnvVar, api.BaseURL())
+			// Name the variable and the host it points at: the generic error says
+			// only that *some* base URL is http, which sends the reader looking for
+			// a setting they may not know they have. newRecapClient rejects the
+			// override before resolving anything, so an http URL here is always
+			// this one. insecureDataOverrideNote strips any credentials from it.
+			fmt.Fprintf(errW, "%s. Use https:// for production, or pass --insecure-http-auth for local dev.\n", insecureDataOverrideNote())
 			return NewSilentError(err)
 		}
 		// Token resolution can fail for many reasons unrelated to the

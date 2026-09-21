@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
@@ -36,6 +37,37 @@ func TestNewAuthenticatedAPIClient_RejectsInsecureOverrideBeforeResolving(t *tes
 
 	if _, err := NewAuthenticatedAPIClient(t.Context(), false); !errors.Is(err, api.ErrInsecureHTTP) {
 		t.Fatalf("error = %v, want ErrInsecureHTTP", err)
+	}
+}
+
+// ENTIRE_API_BASE_URL can carry userinfo, and this note reaches stderr and CI
+// logs. Nothing from the userinfo, path or query may appear in it.
+func TestInsecureDataOverrideNote_NeverEchoesCredentials(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"http://example.test", "ENTIRE_API_BASE_URL is set to an insecure http:// URL (http://example.test)"},
+		{"http://example.test:8080/x?q=1", "ENTIRE_API_BASE_URL is set to an insecure http:// URL (http://example.test:8080)"},
+		{"http://user:secret@example.test", "ENTIRE_API_BASE_URL is set to an insecure http:// URL (http://example.test)"},
+		// Redacted() keeps the username, so a token in that slot would survive it.
+		{"http://s3cr3t-token@example.test", "ENTIRE_API_BASE_URL is set to an insecure http:// URL (http://example.test)"},
+		// No host to rebuild from: report the variable, not its value.
+		{"http://user:secret@", "ENTIRE_API_BASE_URL is set to an insecure http:// URL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Setenv(api.BaseURLEnvVar, tc.raw)
+			got := insecureDataOverrideNote()
+			if got != tc.want {
+				t.Fatalf("note = %q, want %q", got, tc.want)
+			}
+			for _, leak := range []string{"secret", "s3cr3t-token", "q=1", "/x"} {
+				if strings.Contains(got, leak) {
+					t.Errorf("note leaks %q: %s", leak, got)
+				}
+			}
+		})
 	}
 }
 
