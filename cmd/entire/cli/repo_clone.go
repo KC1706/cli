@@ -821,10 +821,20 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 
 	if !interactive.CanPromptInteractively() {
-		if match, ok := byHost[strings.ToLower(strings.TrimSpace(defaultHost))]; ok {
+		wanted := strings.TrimSpace(defaultHost)
+		if match, ok := byHost[strings.ToLower(wanted)]; ok {
 			return match, nil
 		}
-		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is on %d clusters and none of them is %s; pass %s to choose one of: %s", len(hosts), defaultHost, p.selector, strings.Join(hosts, ", "))
+		// No default at all is the caller saying it could not determine a
+		// primary — a native repo whose response omitted its cluster, say —
+		// which is a different thing from a primary missing from the list, and
+		// naming it would print an empty host. Then the selector is all there
+		// is to ask for.
+		missing := ""
+		if wanted != "" {
+			missing = " and none of them is " + wanted
+		}
+		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is on %d clusters%s; pass %s to choose one of: %s", len(hosts), missing, p.selector, strings.Join(hosts, ", "))
 	}
 
 	options := make([]huh.Option[string], len(hosts))

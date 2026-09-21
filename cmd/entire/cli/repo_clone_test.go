@@ -774,9 +774,19 @@ func TestSelectCloneTarget(t *testing.T) {
 	t.Run("no terminal and the default is not one of the placements errors", func(t *testing.T) {
 		t.Parallel()
 		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-ap-south-1.entire.io", clonePlacementPicker())
-		require.ErrorContains(t, err, "--cluster")
+		require.ErrorContains(t, err, "none of them is aws-ap-south-1.entire.io")
+		require.Contains(t, err.Error(), "--cluster")
 		require.Contains(t, err.Error(), "aws-us-east-2.entire.io")
 		require.Contains(t, err.Error(), "aws-eu-west-1.entire.io")
+	})
+
+	t.Run("no terminal and no known primary asks only for the selector", func(t *testing.T) {
+		t.Parallel()
+		// A caller that could not determine a primary passes none. Phrasing that
+		// as a primary the repo lacks would name an empty host.
+		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "", clonePlacementPicker())
+		require.ErrorContains(t, err, "repo is on 2 clusters; pass --cluster")
+		require.NotContains(t, err.Error(), "none of them is")
 	})
 }
 
