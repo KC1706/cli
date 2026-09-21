@@ -349,11 +349,10 @@ type nativeRepoFixture struct {
 	clustersStatus int
 }
 
-// serveNativeRepo fakes the two-call native resolution chain: the path lookup
-// (POST /repos/resolve), then the single-repo GET (the one response that
-// carries clusterHost + path). The project-scoped lookups are not served: they
-// need project#inspect, which a repo-only grantee lacks, so a native ref must
-// never make them. The mirror listing answers empty, so resolution sees
+// serveNativeRepo fakes the two-call native resolution chain: POST
+// /repos/resolve, then the single-repo GET (the one response that carries
+// clusterHost + path). No /projects route is served: a native ref must resolve
+// with repo#pull alone. The mirror listing answers empty, so resolution sees
 // exactly one placement: the home cluster.
 func serveNativeRepo(t *testing.T, repo coreapi.Repo) *coreapi.Client {
 	t.Helper()

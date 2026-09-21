@@ -244,9 +244,8 @@ func resolveRepoRef(ctx context.Context, c repoRefClient, ref, projectRef string
 	if projectRef == "" {
 		return "", fmt.Errorf("repo %q is a name; pass --project <name|ULID> to resolve it, use its /%s/<project>/<repo> path, or a repo ULID", ref, nativeCloneForge)
 	}
-	// A project NAME joins the repo name into the pull-gated path lookup. Only
-	// a project ULID still needs the project-scoped listing: the path lookup
-	// takes names, and there is no reverse ULID→name route.
+	// The path lookup takes names only. A project ULID has no name route, so
+	// it stays on the project-scoped listing.
 	if !looksLikeULID(projectRef) {
 		return resolveNativeRepoByPath(ctx, c, projectRef, ref)
 	}
@@ -254,14 +253,11 @@ func resolveRepoRef(ctx context.Context, c repoRefClient, ref, projectRef string
 }
 
 // resolveNativeRepoByPath resolves <project>/<repo> through POST /repos/resolve,
-// the one by-name route gated on repo#pull alone. The project-scoped lookups
-// (GET /projects?name=, GET /projects/{id}/repos?name=) require project#inspect,
-// which a direct repo grant does not confer. Both segments are names by
-// construction and never touch the ULID passthrough.
+// which needs repo#pull only. The project-scoped lookups need project#inspect,
+// which a direct repo grant does not confer.
 //
-// The server answers unknown and unauthorized alike with "unavailable", so the
-// miss is reported as one thing. It wraps errNamedRefNotFound so routing
-// callers still classify it as a definitive miss.
+// The server answers unknown and unauthorized alike, so the miss is one error.
+// It wraps errNamedRefNotFound so routing callers classify it as definitive.
 func resolveNativeRepoByPath(ctx context.Context, c repoRefClient, project, repoName string) (string, error) {
 	fullName := project + "/" + repoName
 	out, err := c.ResolveRepos(ctx, &coreapi.ResolveReposInputBody{

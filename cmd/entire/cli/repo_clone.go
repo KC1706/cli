@@ -188,9 +188,9 @@ func parseNativeCloneRef(ref string) (project, repo string, err error) {
 }
 
 // resolveNativeRepo performs the canonical /et/<project>/<repo> identity
-// lookup shared by clone and repo-scoped data commands. Both segments are
-// names, so they go straight to the path lookup: the ULID passthrough in
-// resolveRepoRef would misread a ULID-shaped project NAME as an id.
+// lookup shared by clone and repo-scoped data commands. It bypasses
+// resolveRepoRef: both segments are names, and a ULID-shaped project name
+// must not be read as an id.
 func resolveNativeRepo(ctx context.Context, c repoRefClient, project, repoName string) (*coreapi.Repo, error) {
 	repoID, err := resolveNativeRepoByPath(ctx, c, project, repoName)
 	if err != nil {

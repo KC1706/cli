@@ -81,8 +81,7 @@ func TestMatchClusterBySlug(t *testing.T) {
 type fakeCellCore struct {
 	repo    *coreapi.Repo
 	repoErr error
-	// resolution answers POST /repos/resolve, the native /et/ path lookup.
-	// nil resolves nothing, the server's answer for unknown and unshared alike.
+	// resolution answers POST /repos/resolve; nil resolves nothing.
 	resolution  *coreapi.ResolveReposResponse
 	resolveErr  error
 	clusters    []coreapi.Cluster
@@ -131,9 +130,9 @@ func (f *fakeCellCore) ResolveRepos(ctx context.Context, _ *coreapi.ResolveRepos
 	return &coreapi.ResolveReposResponse{}, nil
 }
 
-// errProjectLookupRan fails any native-ref resolution that falls back to the
-// project-scoped lookups. Those need project#inspect, which a repo-only grant
-// does not confer, so a native ref must never reach them.
+// errProjectLookupRan fails a native-ref resolution that reaches a
+// project-scoped lookup. Those need project#inspect, which a repo-only grant
+// lacks.
 var errProjectLookupRan = errors.New("project lookup must not run for a native ref")
 
 func (f *fakeCellCore) ListProjects(context.Context, coreapi.ListProjectsParams) (*coreapi.ListProjectsOutputBody, error) {
@@ -248,7 +247,6 @@ func TestResolveNativeRepoCellPlacement_ClassifiesDefinitiveMisses(t *testing.T)
 		wantMessageSnippet string
 	}{
 		{
-			// The server answers unknown and unshared alike, so one miss.
 			name:               "repo does not resolve",
 			core:               &fakeCellCore{},
 			wantNotOnboarded:   true,

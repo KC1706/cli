@@ -257,11 +257,8 @@ func TestResolveRepoRef(t *testing.T) {
 // nativePathHandler serves the one lookup a /et/widgets/web ref makes, POST
 // /repos/resolve, plus GET /repos/{id} for the --project ULID agreement check.
 // It records the full name the server was asked to resolve, so tests can pin
-// server-side matching and the .git trim.
-//
-// The project-scoped lookups are refused with 403: they need project#inspect,
-// which a repo-only grantee lacks. That is the bug this fixture pins — a repo
-// shared with one person resolved for its owner and not for them.
+// server-side matching and the .git trim. Any /projects call is refused: a
+// native ref must resolve with repo#pull alone.
 func nativePathHandler(t *testing.T, gotFullName *string) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -279,7 +276,7 @@ func nativePathHandler(t *testing.T, gotFullName *string) http.HandlerFunc {
 			if len(in.Repositories) > 0 {
 				*gotFullName = in.Repositories[0].FullName
 			}
-			// The server echoes the requested name; the CLI matches on it.
+			// The CLI matches on the echoed requested name.
 			if err := printJSON(w, nativeResolution(*gotFullName, ulidRepoWeb)); err != nil {
 				t.Errorf("encode resolution: %v", err)
 			}
@@ -288,7 +285,7 @@ func nativePathHandler(t *testing.T, gotFullName *string) http.HandlerFunc {
 				t.Errorf("encode repo: %v", err)
 			}
 		default:
-			t.Errorf("unexpected %s %s: a native ref must resolve without a project lookup", r.Method, r.URL.Path)
+			t.Errorf("unexpected %s %s: a native ref must not need a project lookup", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusForbidden)
 		}
 	}
@@ -322,8 +319,7 @@ func TestResolveRepoRef_NativePath(t *testing.T) {
 
 	t.Run("a repo the server does not resolve is one friendly miss", func(t *testing.T) {
 		t.Parallel()
-		// Unknown and unshared repos share the server's "unavailable" answer,
-		// so the CLI cannot and must not claim to know which it was.
+		// Unknown and unshared repos share the server's "unavailable" answer.
 		c, _ := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 			if err := printJSON(w, &coreapi.ResolveReposResponse{Resolutions: []coreapi.RepoResolution{{
 				Provider: repoProviderEntire, RequestedFullName: "widgets/web", Status: coreapi.RepoResolutionStatusUnavailable,
@@ -338,9 +334,7 @@ func TestResolveRepoRef_NativePath(t *testing.T) {
 
 	t.Run("--project agreeing with the path is allowed", func(t *testing.T) {
 		t.Parallel()
-		// A name compares case-insensitively (the server matches lower(name))
-		// before any call; a ULID compares against the resolved repo's owning
-		// project, which costs one GetRepo.
+		// A name compares locally; a ULID costs one GetRepo.
 		for project, wantCalls := range map[string]int64{"widgets": 1, "WIDGETS": 1, ulidProjectWidgets: 2} {
 			t.Run(project, func(t *testing.T) {
 				t.Parallel()

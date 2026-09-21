@@ -235,12 +235,11 @@ the commands are always runnable in every build.
   mirror ref is refused there (a mirror is in no project, so it is addressed by
   ULID), and an `entire://` URL is not parsed at all.
   Every `<project>/<repo>` name pair resolves through **one** call,
-  `POST /repos/resolve` (`resolveNativeRepoByPath`), because that route is
-  gated on `repo#pull` alone. The project-scoped routes (`GET /projects?name=`,
-  `GET /projects/{id}/repos?name=`) require `project#inspect`, which a direct
-  repo grant does not confer — so a repo shared with one person resolved for
-  its owner and returned `permission denied` for the person it was shared
-  with. Only a `--project` **ULID** with a bare name still takes the
+  `POST /repos/resolve` (`resolveNativeRepoByPath`), because that route needs
+  `repo#pull` alone. The project-scoped routes (`GET /projects?name=`,
+  `GET /projects/{id}/repos?name=`) need `project#inspect`, which a direct
+  repo grant does not confer, so a repo shared with one person must never
+  resolve through them. Only a `--project` **ULID** with a bare name takes the
   project-scoped listing, since there is no ULID→name route. Alongside the
   path form, `--project` is checked for agreement: a name compares
   case-insensitively before any request, a ULID against the resolved repo's
