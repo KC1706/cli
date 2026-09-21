@@ -187,15 +187,12 @@ func parseNativeCloneRef(ref string) (project, repo string, err error) {
 	return project, repo, nil
 }
 
-type nativeRepoResolverClient interface {
-	repoRefClient
-	GetRepo(ctx context.Context, params coreapi.GetRepoParams) (*coreapi.Repo, error)
-}
-
 // resolveNativeRepo performs the canonical /et/<project>/<repo> identity
-// lookup shared by clone and repo-scoped data commands.
-func resolveNativeRepo(ctx context.Context, c nativeRepoResolverClient, project, repoName string) (*coreapi.Repo, error) {
-	repoID, err := resolveRepoRef(ctx, c, repoName, project)
+// lookup shared by clone and repo-scoped data commands. Both segments are
+// names, so they go straight to the path lookup: the ULID passthrough in
+// resolveRepoRef would misread a ULID-shaped project NAME as an id.
+func resolveNativeRepo(ctx context.Context, c repoRefClient, project, repoName string) (*coreapi.Repo, error) {
+	repoID, err := resolveNativeRepoByPath(ctx, c, project, repoName)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +204,7 @@ func resolveNativeRepo(ctx context.Context, c nativeRepoResolverClient, project,
 }
 
 // resolveNativeCloneURL resolves an Entire-native repo (by project and repo
-// name) to its entire:// clone URL: name → ULID via the project-scoped lookup,
+// name) to its entire:// clone URL: name → ULID via the pull-gated path lookup,
 // then GetRepo — the one call that returns both clusterHost and path. The URL
 // is the server's own coordinates, never synthesized from the user's ref: the
 // path is the repo's, and the host is one of its readable placements — the
