@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -17,7 +18,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/internal/coreapi"
-	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 )
 
 // mirrorCloneRefRe parses the clone-ref shape `entire repo clone` accepts:
@@ -612,20 +612,24 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 			return "", fmt.Errorf("invalid --cluster: %w", err)
 		}
 		if err := runCoreForCluster(cmd, cluster, lister); err != nil {
-			// ErrUnreachable and nothing else: the host parses but no cluster
-			// answered on it, so it is a typo rather than a federation we
-			// failed to reach. Listing from the active context then lets
-			// selectPlacement name the clusters the repo IS on — the answer
-			// the /et/ path already gives for the same mistake — with the dial
-			// failure left at debug. Every other discovery error is about a
-			// cluster that does exist (no login for it, no trusted issuers, a
-			// 403 from the listing) and says something the user must act on,
-			// so it surfaces unchanged; reporting "not mirrored" for a mirror
-			// that is really there would be a lie.
-			if !errors.Is(err, clusterdiscovery.ErrUnreachable) {
+			// A name that does not resolve, and nothing else. DNS answering
+			// "no such host" is the one failure that says the host is not a
+			// cluster at all, so the active context can be asked instead and
+			// selectPlacement can name the clusters the repo IS on — the
+			// answer the /et/ path gives for the same typo.
+			//
+			// Deliberately narrower than ErrUnreachable, which also covers a
+			// timeout, a refused connection and a TLS failure; its own doc
+			// says the client cannot tell a typo from a real-but-down cluster.
+			// Treating those as typos would let a momentary blip on a cluster
+			// in another federation answer "not mirrored" — or, with nothing
+			// mirrored here, tell the user to onboard a repo that is already
+			// mirrored there. That is the exact bug the cluster-addressed dial
+			// above exists to fix, so every other failure surfaces unchanged.
+			if !hostDoesNotResolve(err) {
 				return "", err
 			}
-			logging.Debug(cmd.Context(), "cluster host is unreachable; listing placements from the active context", "cluster", cluster, "error", err)
+			logging.Debug(cmd.Context(), "cluster host does not resolve; listing placements from the active context", "cluster", cluster, "error", err)
 			if fallbackErr := runCore(cmd, lister); fallbackErr != nil {
 				// Both routes to a placement list are gone. Each half names a
 				// different thing the user may have to fix — a mistyped host,
@@ -661,6 +665,19 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 	}
 	cloneURL := forgeCloneURL(mirrorCloneForge, chosen.ClusterHost, owner, repo)
 	return cloneURL, nil
+}
+
+// hostDoesNotResolve reports whether err bottoms out in DNS answering "no such
+// host" for the name that was dialled.
+//
+// This is the only transport failure that is evidence about the HOST rather
+// than about the network between here and it: a name that does not resolve
+// cannot be a cluster, whereas a timeout or a refused connection says nothing
+// about whether the cluster exists. Callers use it to decide when they may
+// speak about a host they never reached.
+func hostDoesNotResolve(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
 // mirrorLister is the subset of the control-plane client listMirrorsForRepo

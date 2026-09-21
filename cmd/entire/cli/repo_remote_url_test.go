@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -167,13 +168,14 @@ func TestRepoRemoteURL_UnknownClusterReadsTheSameOnBothForges(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	// No cluster answers on the typo'd host. ErrUnreachable is the sentinel
-	// discovery really wraps a transport failure in, and the only one the
-	// fallback keys on, so the fake has to carry it too.
+	// The name does not resolve, which is the shape discovery really produces
+	// for a typo and the only one the fallback keys on, so the fake carries a
+	// genuine *net.DNSError under the same sentinel.
 	prev := clusterCoreClient
 	clusterCoreClient = func(_ context.Context, host string) (*coreapi.Client, error) {
 		require.Equal(t, unknown, host)
-		return nil, fmt.Errorf("%w: lookup %s: no such host", clusterdiscovery.ErrUnreachable, host)
+		return nil, fmt.Errorf("%w: dial tcp: %w", clusterdiscovery.ErrUnreachable,
+			&net.DNSError{Err: "no such host", Name: host, IsNotFound: true})
 	}
 	t.Cleanup(func() { clusterCoreClient = prev })
 
@@ -221,7 +223,8 @@ func TestRepoRemoteURL_ReachableClusterKeepsItsOwnError(t *testing.T) {
 func TestRepoRemoteURL_BothLookupsFailingReportsBoth(t *testing.T) {
 	prevCluster := clusterCoreClient
 	clusterCoreClient = func(_ context.Context, host string) (*coreapi.Client, error) {
-		return nil, fmt.Errorf("%w: lookup %s: no such host", clusterdiscovery.ErrUnreachable, host)
+		return nil, fmt.Errorf("%w: dial tcp: %w", clusterdiscovery.ErrUnreachable,
+			&net.DNSError{Err: "no such host", Name: host, IsNotFound: true})
 	}
 	t.Cleanup(func() { clusterCoreClient = prevCluster })
 
@@ -242,6 +245,50 @@ func TestRepoRemoteURL_BothLookupsFailingReportsBoth(t *testing.T) {
 	require.Contains(t, err.Error(), "no such host", "the host the user named did not answer")
 	require.Contains(t, err.Error(), "active login has expired", "and the fallback says why it could not answer either")
 	require.NotContains(t, out.String(), entireCloneURLScheme)
+}
+
+// TestRepoRemoteURL_UnreachableClusterIsNotTreatedAsAbsent covers the failure
+// that looks like a typo and is not one. A cluster in another federation that
+// times out is unreachable, but nothing about that says the repo is not
+// mirrored there — and the active context cannot see that federation, so its
+// placement list is not evidence of absence. Answering from it would resurrect
+// the bug the cluster-addressed dial exists to fix: "not mirrored on
+// <host>" for a mirror that is really there, or, with nothing mirrored in the
+// active context, an instruction to onboard a repo that is already onboarded.
+//
+// Not parallel: swaps the package-global activeCoreClient/clusterCoreClient.
+func TestRepoRemoteURL_UnreachableClusterIsNotTreatedAsAbsent(t *testing.T) {
+	const elsewhere = "royalcanin.partial.to"
+
+	for _, tc := range []struct {
+		name     string
+		fallback []coreapi.ResolvedPlacement
+	}{
+		// The active context answers, but about its own federation only.
+		{"fallback lists other clusters", []coreapi.ResolvedPlacement{{ClusterHost: defaultClusterHost}}},
+		// And when it holds nothing, silence is not proof either.
+		{"fallback lists nothing", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				assert.NoError(t, printJSON(w, &coreapi.ResolvePlacementsOutputBody{Placements: tc.fallback}))
+			}))
+			t.Cleanup(srv.Close)
+
+			prev := clusterCoreClient
+			clusterCoreClient = func(context.Context, string) (*coreapi.Client, error) {
+				return nil, fmt.Errorf("%w: dial tcp: %w", clusterdiscovery.ErrUnreachable,
+					&net.DNSError{Err: "i/o timeout", Name: elsewhere, IsTimeout: true})
+			}
+			t.Cleanup(func() { clusterCoreClient = prev })
+
+			_, _, err := runCoreCmd(t, newRepoRemoteURLCmd, srv.URL, "/gh/owner/repo", "--cluster", elsewhere)
+			require.ErrorContains(t, err, "i/o timeout", "the connectivity failure is the answer")
+			require.NotContains(t, err.Error(), "not mirrored", "we never reached the federation that would know")
+			require.NotContains(t, err.Error(), "mirror add", "and must not tell the user to onboard what may already exist")
+		})
+	}
 }
 
 // TestRepoRemoteURL_PickerKeepsStdoutClean is the regression test for the
