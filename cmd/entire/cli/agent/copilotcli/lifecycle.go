@@ -8,7 +8,6 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
-	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
 
 // subagentSessionIDPrefix is the prefix older Copilot releases used when they
@@ -235,9 +234,9 @@ func (c *CopilotCLIAgent) readSubagentEvidence(ctx context.Context, env *hookEnv
 	if env.SessionID == "" || (env.AgentID == "" && env.AgentName == "") || env.TranscriptPath == "" {
 		return subagentEvidence{}, false
 	}
-	if validation.ValidateSessionID(env.SessionID) != nil {
-		return subagentEvidence{}, false
-	}
+	// No ValidateSessionID here: store.SessionFile below validates as its first
+	// statement, and a second copy reads as "the store does not" — the belief
+	// TestResolveSessionFileCallersAreSanctioned exists to remove.
 	store, err := agent.OpenSessionStore(c, env.CWD)
 	if err != nil {
 		logging.Warn(ctx, "copilot-cli: cannot open session store for subagent stop", "err", err)

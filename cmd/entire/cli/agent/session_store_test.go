@@ -129,7 +129,21 @@ func TestSessionStore_FollowsSymlinkedStoreRoot(t *testing.T) {
 	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ValidateExternalWriteRef("session.jsonl"))
+	// ABSOLUTE refs on purpose. A relative one is returned by Name unchanged
+	// without s.dir being consulted at all, so it answers nil whether the store
+	// root is a symlink, a real directory, or absent — which is what let the
+	// realpath case below ship broken.
+	require.NoError(t, store.ValidateExternalWriteRef(filepath.Join(storeDir, "session.jsonl")))
+
+	// The same file named through the link's TARGET. A plugin reports its store
+	// through get-session-dir and may hand back a realpath'd reference; both
+	// spellings are one directory and both must be accepted.
+	require.NoError(t, store.ValidateExternalWriteRef(filepath.Join(realStore, "session.jsonl")))
+
+	// Still outside is still refused, resolved or not.
+	outside := t.TempDir()
+	require.Error(t, store.ValidateExternalWriteRef(filepath.Join(outside, "session.jsonl")))
+
 	require.NoError(t, store.WriteFile("session.jsonl", []byte("hi\n"), 0o600))
 	assert.FileExists(t, filepath.Join(realStore, "session.jsonl"))
 }

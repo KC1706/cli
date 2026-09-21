@@ -248,9 +248,64 @@ func ValidateExternalSessionRef(ref string) (filesystemPath bool, err error) {
 func (s *SessionStore) ValidateExternalWriteRef(ref string) error {
 	name, err := s.Name(ref)
 	if err != nil {
-		return err
+		// Name is lexical, and the plugin is a separate program that need not
+		// spell the store the way get-session-dir did. A dotfile-managed
+		// ~/.agentx/sessions reported as the link and read back as its target —
+		// or anything under macOS /var, which is a link to /private/var — is the
+		// SAME directory, and refusing it would break exactly the setup the
+		// built-in write path deliberately follows (see openRootForWrite). So a
+		// containment failure is retried with both sides resolved before it is
+		// believed.
+		resolved, ok := s.nameAcrossSymlinks(ref)
+		if !ok {
+			return err
+		}
+		name = resolved
 	}
 	return s.validateWritePath(name)
+}
+
+// nameAcrossSymlinks retries Name with the store and the reference both
+// resolved. It reports false when either cannot be resolved, so the caller
+// keeps the lexical answer rather than trading a definite refusal for an
+// unknown.
+func (s *SessionStore) nameAcrossSymlinks(ref string) (string, bool) {
+	realDir, ok := evalSymlinksAllowingMissingLeaf(s.dir)
+	if !ok {
+		return "", false
+	}
+	realRef, ok := evalSymlinksAllowingMissingLeaf(ref)
+	if !ok {
+		return "", false
+	}
+	rel, err := filepath.Rel(realDir, realRef)
+	if err != nil || rel == "." || paths.IsRelativeTraversal(rel) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// evalSymlinksAllowingMissingLeaf resolves the deepest existing prefix of p and
+// re-appends the rest. filepath.EvalSymlinks requires the whole path to exist,
+// and the reference being validated names a file that is about to be written —
+// so the leaf, and sometimes its directory, legitimately does not exist yet.
+func evalSymlinksAllowingMissingLeaf(p string) (string, bool) {
+	rest := ""
+	for cur := p; ; {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			return filepath.Join(resolved, rest), true
+		}
+		if !os.IsNotExist(err) {
+			return "", false
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", false
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // validateWritePath rejects an unsafe component in name and a symlink at name
@@ -310,8 +365,13 @@ func (s *SessionStore) ReadFile(name string) ([]byte, error) {
 }
 
 // WriteFile writes name in the store, creating parent directories. Session
-// layouts nest (Gemini keys by project hash, Pi by encoded repo path), so the
-// parents are made here rather than at each call site.
+// layouts nest (Copilot `<id>/events.jsonl`, Cursor `<id>/<id>.jsonl`, Codex
+// `YYYY/MM/DD/`), so the parents are made here rather than at each call site.
+//
+// Not Gemini or Pi, which this comment used to cite: both resolve to a flat
+// name and put their project component in GetSessionDir, i.e. in the store root
+// — so they are precisely the two agents for which the MkdirAll below never
+// fires.
 func (s *SessionStore) WriteFile(name string, data []byte, perm os.FileMode) error {
 	if err := validateWriteName(name); err != nil {
 		return err

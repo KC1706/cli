@@ -421,11 +421,8 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 			continue
 		}
 		if resolver, ok := sessionAgent.(agent.RestoredSessionPathResolver); ok {
-			resolvedFile, resolveErr := resolver.ResolveRestoredSessionFile(sessionAgentDir, sessionID, content.Transcript)
-			if resolveErr != nil {
-				fmt.Fprintf(errW, "  Warning: failed to resolve restored session path for session %d (%s): %v (using fallback path)\n", i, sessionID, resolveErr)
-			} else {
-				sessionFile = resolvedFile
+			if resolved, ok := restoredSessionFile(errW, resolver, restoreStore, sessionAgentDir, sessionID, content.Transcript, i); ok {
+				sessionFile = resolved
 			}
 		}
 
@@ -615,6 +612,34 @@ type SessionRestoreInfo struct {
 	Status         SessionRestoreStatus // Status of this session
 	LocalTime      time.Time
 	CheckpointTime time.Time
+}
+
+// restoredSessionFile applies an agent's RestoredSessionPathResolver, reporting
+// false when the caller should keep the path SessionFile already produced.
+//
+// The result goes back through SessionStore.Name before it is accepted. It
+// replaces a path the store has already validated with one the agent derived
+// from the checkpoint's own transcript bytes — the same sink shape as
+// ResolveSessionFile — so it earns the same containment check rather than
+// inheriting the confidence of the value it overwrites.
+func restoredSessionFile(
+	errW io.Writer,
+	resolver agent.RestoredSessionPathResolver,
+	store *agent.SessionStore,
+	sessionAgentDir, sessionID string,
+	transcript []byte,
+	index int,
+) (string, bool) {
+	resolved, err := resolver.ResolveRestoredSessionFile(sessionAgentDir, sessionID, transcript)
+	if err != nil {
+		fmt.Fprintf(errW, "  Warning: failed to resolve restored session path for session %d (%s): %v (using fallback path)\n", index, sessionID, err)
+		return "", false
+	}
+	if _, err := store.Name(resolved); err != nil {
+		fmt.Fprintf(errW, "  Warning: session %d (%s) restored path resolves outside its session directory, using fallback path: %v\n", index, sessionID, err)
+		return "", false
+	}
+	return resolved, true
 }
 
 // classifySessionsForRestore checks all sessions in a checkpoint and returns info

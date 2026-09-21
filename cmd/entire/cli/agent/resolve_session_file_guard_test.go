@@ -8,9 +8,14 @@ import (
 )
 
 // resolveSessionFilePattern matches a call to an agent's own
-// ResolveSessionFile. A method DEFINITION (`) ResolveSessionFile(`) has no dot
-// before the name, so only call sites match.
-const resolveSessionFilePattern = `\.ResolveSessionFile\(`
+// ResolveSessionFile or ResolveRestoredSessionFile. The leading `\.` is what
+// keeps a method DEFINITION (`) ResolveSessionFile(`) out: definitions have no
+// dot before the name, so only call sites match.
+//
+// Both resolvers, because both turn an agent-supplied ID into a path from a
+// directory the caller passes in, and the restored one additionally derives its
+// answer from checkpoint transcript bytes.
+const resolveSessionFilePattern = `\.Resolve[A-Za-z]*SessionFile\(`
 
 // resolveSessionFileCallers is every file allowed to call an agent's
 // ResolveSessionFile directly, with the reason it may.
@@ -29,6 +34,11 @@ const resolveSessionFilePattern = `\.ResolveSessionFile\(`
 // path is inside the store, and which is what both former violators now use.
 var resolveSessionFileCallers = map[string]string{
 	"cmd/entire/cli/agent/session_store.go": "SessionFile itself — the chokepoint that validates the ID before resolving it, and converts the result back into a name inside the store",
+
+	// Calls ResolveRestoredSessionFile with an ID SessionFile has already
+	// validated, and passes the result back through SessionStore.Name before
+	// using it.
+	"cmd/entire/cli/strategy/manual_commit_pending.go": "restore path: resolves an already-validated ID and re-checks containment through the store",
 
 	// Pure delegation across the external-plugin boundary: the wrapper forwards
 	// to the plugin's implementation and resolves nothing of its own, so it is
