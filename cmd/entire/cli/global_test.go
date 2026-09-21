@@ -110,6 +110,11 @@ func TestUnsetEnv(t *testing.T) {
 	})
 
 	t.Run("an already-absent key stays absent after restore", func(t *testing.T) {
+		// Establish the absent prior state rather than assuming it. Without
+		// this the subtest asserts nothing when the key happens to be exported:
+		// the inner restore correctly puts the ambient value back, and this
+		// subtest fails having never exercised an absent prior state at all.
+		unsetEnv(t, key)
 		t.Run("inner", func(t *testing.T) {
 			unsetEnv(t, key)
 			if v, ok := os.LookupEnv(key); ok {
