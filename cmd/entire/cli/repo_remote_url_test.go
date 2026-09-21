@@ -211,6 +211,39 @@ func TestRepoRemoteURL_ReachableClusterKeepsItsOwnError(t *testing.T) {
 	require.NotContains(t, err.Error(), "not mirrored")
 }
 
+// TestRepoRemoteURL_BothLookupsFailingReportsBoth covers the one path where
+// the fallback has nothing to offer. The named cluster did not answer and the
+// active context could not stand in for it, and the two failures are
+// independent things to fix — reporting only the first would have the user
+// correct the host, re-run, and only then discover their login is gone.
+//
+// Not parallel: swaps the package-global activeCoreClient/clusterCoreClient.
+func TestRepoRemoteURL_BothLookupsFailingReportsBoth(t *testing.T) {
+	prevCluster := clusterCoreClient
+	clusterCoreClient = func(_ context.Context, host string) (*coreapi.Client, error) {
+		return nil, fmt.Errorf("%w: lookup %s: no such host", clusterdiscovery.ErrUnreachable, host)
+	}
+	t.Cleanup(func() { clusterCoreClient = prevCluster })
+
+	prevActive := activeCoreClient
+	activeCoreClient = func(context.Context) (*coreapi.Client, error) {
+		return nil, errors.New("active login has expired")
+	}
+	t.Cleanup(func() { activeCoreClient = prevActive })
+
+	cmd := newRepoRemoteURLCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"/gh/owner/repo", "--cluster", "wrongcluster"})
+
+	err := cmd.ExecuteContext(t.Context())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no such host", "the host the user named did not answer")
+	require.Contains(t, err.Error(), "active login has expired", "and the fallback says why it could not answer either")
+	require.NotContains(t, out.String(), entireCloneURLScheme)
+}
+
 // TestRepoRemoteURL_PickerKeepsStdoutClean is the regression test for the
 // command's one hard contract: `git remote add entire "$(entire repo
 // remote url …)"` must capture the URL and nothing else, even when the mirror

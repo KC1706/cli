@@ -627,7 +627,13 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 			}
 			logging.Debug(cmd.Context(), "cluster host is unreachable; listing placements from the active context", "cluster", cluster, "error", err)
 			if fallbackErr := runCore(cmd, lister); fallbackErr != nil {
-				return "", err
+				// Both routes to a placement list are gone. Each half names a
+				// different thing the user may have to fix — a mistyped host,
+				// and whatever stopped the active context from standing in
+				// (an expired login, say) — and they would otherwise learn the
+				// second only after fixing the first. Nothing is joined on the
+				// path that matters, where the fallback answers.
+				return "", errors.Join(err, fallbackErr)
 			}
 		}
 	} else if err := runCore(cmd, lister); err != nil {
