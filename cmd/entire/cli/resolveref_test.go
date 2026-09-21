@@ -247,6 +247,42 @@ func TestResolveRepoRef(t *testing.T) {
 			t.Errorf("resolveRepoRef unknown name: err = %v, want a \"no repo named\" error", err)
 		}
 	})
+
+	t.Run("name under --project <name> resolves like a path, no project lookup", func(t *testing.T) {
+		t.Parallel()
+		// `repo view web --project widgets`: a repo-only grantee holds repo#pull
+		// but not project#inspect, so the name pair must go through
+		// repos/resolve. nativePathHandler refuses any /projects call.
+		var gotFullName string
+		c, calls := resolveTestClient(t, nativePathHandler(t, &gotFullName))
+		got, err := resolveRepoRef(context.Background(), c, "web", "widgets")
+		if err != nil {
+			t.Fatalf("resolveRepoRef: %v", err)
+		}
+		if got != ulidRepoWeb {
+			t.Errorf("resolveRepoRef = %q, want web id", got)
+		}
+		if gotFullName != "widgets/web" {
+			t.Errorf("server received fullName=%q, want %q", gotFullName, "widgets/web")
+		}
+		if n := calls.Load(); n != 1 {
+			t.Errorf("name under project name made %d HTTP calls, want 1 (repos/resolve)", n)
+		}
+	})
+
+	t.Run("unknown name under --project <name> is one friendly miss", func(t *testing.T) {
+		t.Parallel()
+		c, _ := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			if err := printJSON(w, &coreapi.ResolveReposResponse{Resolutions: []coreapi.RepoResolution{{
+				Provider: repoProviderEntire, RequestedFullName: "widgets/nope", Status: coreapi.RepoResolutionStatusUnavailable,
+			}}}); err != nil {
+				t.Errorf("encode resolution: %v", err)
+			}
+		})
+		_, err := resolveRepoRef(context.Background(), c, "nope", "widgets")
+		require.ErrorIs(t, err, errNamedRefNotFound)
+		require.EqualError(t, err, "repo /et/widgets/nope not found or not shared with you")
+	})
 }
 
 // TestResolveRepoRef_NativePath covers the /et/<project>/<repo> path grammar
