@@ -231,17 +231,21 @@ func runLogout(ctx context.Context, outW, errW io.Writer, deps logoutDeps) error
 			fmt.Fprintf(errW, "Warning: skipped a malformed saved login; check %s\n", deps.contextsFileOrDefault())
 			continue
 		}
+		ended := false
 		func() {
 			lctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			revokeLogin(lctx, errW, deps, c)
+			ended = revokeLogin(lctx, errW, deps, c)
 		}()
 		// Checked again after the revoke: a login whose revocation was cut
 		// short keeps its local credentials, so the surviving session stays
-		// visible to `auth status` and a re-run can finish the job. A
-		// per-login deadline does not cancel ctx, so a hung login server
-		// still gets removed locally.
-		if err := ctx.Err(); err != nil {
+		// visible to `auth status` and a re-run can finish the job. When the
+		// revoke is confirmed ended there is nothing left to protect, and
+		// stopping here would strand a context for a session that no longer
+		// exists — so that removal is finished and the next iteration's
+		// check ends the sweep. A per-login deadline does not cancel ctx, so
+		// a hung login server still gets removed locally.
+		if err := ctx.Err(); err != nil && !ended {
 			interrupted = err
 			break
 		}
@@ -276,34 +280,46 @@ func runLogout(ctx context.Context, outW, errW io.Writer, deps logoutDeps) error
 }
 
 // revokeLogin ends c's session(s) server-side, warning on failure.
-func revokeLogin(ctx context.Context, errW io.Writer, deps logoutDeps, c *contexts.Context) {
+//
+// It reports whether that session is known to be over: a clean revoke, a
+// family the server no longer has, or one it had already declared dead.
+// Every warning path reports false — the session may still be live, and
+// then c's local credentials are the only thing that can still revoke it.
+func revokeLogin(ctx context.Context, errW io.Writer, deps logoutDeps, c *contexts.Context) (ended bool) {
 	if c.CoreURL == "" {
-		return
+		// No login server recorded, so there is no session to strand.
+		return true
 	}
 	b, err := deps.tokenForContext(ctx, c)
 	if err != nil {
 		fmt.Fprintf(errW, "Warning: couldn't read token for %q; removing locally only: %v\n", c.Name, err)
-		return
+		return false
 	}
 	if b.token == "" {
-		return
+		// Nothing to authenticate a revoke with; a later run may refresh one.
+		return false
 	}
 	if !deps.insecureHTTPAuth {
 		if err := api.RequireSecureURL(c.CoreURL); err != nil {
 			fmt.Fprintf(errW, "Warning: skipping server-side revocation for %q: %v\n", c.Name, err)
-			return
+			return false
 		}
 	}
 	err = deps.revoke(ctx, c.CoreURL, b.token)
 	switch {
 	case err == nil:
+		return true
 	case api.IsHTTPErrorStatus(err, http.StatusNotFound):
 		// The family is already gone: the desired state.
+		return true
 	case errors.Is(b.stale, auth.ErrReauthRequired) && api.IsHTTPErrorStatus(err, http.StatusUnauthorized):
 		// The login server already declared this session dead.
+		return true
 	case b.stale != nil && api.IsHTTPErrorStatus(err, http.StatusUnauthorized):
 		fmt.Fprintf(errW, "Warning: couldn't refresh the login for %q; its session on %s may still be active: %v\n", c.Name, c.CoreURL, b.stale)
+		return false
 	default:
 		fmt.Fprintf(errW, "Warning: server-side session revocation failed for %q: %v\n", c.Name, err)
+		return false
 	}
 }

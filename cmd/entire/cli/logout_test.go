@@ -526,6 +526,74 @@ func TestRunLogout_CancelMidSweepStopsAndKeepsTheInterruptedLogin(t *testing.T) 
 	}
 }
 
+// Ctrl-C landing between a revoke and the local delete: whether the login
+// is still removed turns on what the revoke proved. A session known to be
+// over leaves nothing to protect, so stranding its credentials would just be
+// a stale context; a revoke that proved nothing keeps them, because they are
+// the only thing that can still end that session.
+func TestRunLogout_CancelAfterRevokeRemovesOnlyConfirmedEndings(t *testing.T) {
+	t.Parallel()
+
+	unauthorized := &api.HTTPError{StatusCode: http.StatusUnauthorized, Message: "Not authenticated"}
+	for _, tc := range []struct {
+		name        string
+		stale       error
+		revokeErr   error
+		wantRemoved bool
+	}{
+		{"revoke succeeded", nil, nil, true},
+		{"family already gone", nil, &api.HTTPError{StatusCode: http.StatusNotFound, Message: "not found"}, true},
+		{"server had already ended it", fmt.Errorf("refresh: %w", auth.ErrReauthRequired), unauthorized, true},
+		{"revoke cut short", nil, context.Canceled, false},
+		{"unrefreshable bearer rejected", errors.New("dial tcp: connection refused"), unauthorized, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			const aURL = "https://a.auth.entire.io"
+			provider := makeLogoutContexts(
+				&contexts.Context{Name: "a", CoreURL: aURL},
+				&contexts.Context{Name: "b", CoreURL: "https://b.auth.entire.io"},
+			)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			tokenFor := func(context.Context, *contexts.Context) (bearer, error) {
+				return bearer{token: testLogoutToken, stale: tc.stale}, nil
+			}
+			revoke := func(_ context.Context, coreURL, _ string) error {
+				if coreURL == aURL {
+					cancel() // Ctrl-C as a's revoke returns
+					return tc.revokeErr
+				}
+				t.Errorf("revoke reached %q; the sweep should have stopped", coreURL)
+				return nil
+			}
+			var removed []string
+			remove := func(name string) error { removed = append(removed, name); return nil }
+
+			var out, errOut bytes.Buffer
+			err := runLogout(ctx, &out, &errOut, unitDeps(provider, tokenFor, revoke, remove))
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want the interrupt reported either way", err)
+			}
+			if tc.wantRemoved && (len(removed) != 1 || removed[0] != "a") {
+				t.Fatalf("removed = %v, want a removed: its session is known to be over", removed)
+			}
+			if !tc.wantRemoved && len(removed) != 0 {
+				t.Fatalf("removed = %v, want a kept: the revoke proved nothing", removed)
+			}
+			want := "2 saved login(s) still on this machine"
+			if tc.wantRemoved {
+				want = "1 saved login(s) still on this machine"
+			}
+			if !strings.Contains(errOut.String(), want) {
+				t.Fatalf("stderr = %q, want %q", errOut.String(), want)
+			}
+		})
+	}
+}
+
 // A removal failure and an interrupt in the same sweep are both reported:
 // the interrupt must stay visible through errors.Is so main.go re-raises the
 // signal rather than exiting 1 on the removal failure, and the count left
