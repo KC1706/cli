@@ -486,6 +486,15 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			var (
 				placements []coreapi.ResolvedPlacement
 				nativeRepo *coreapi.Repo
+				// The primary's host as the placement list spells it. Resolved
+				// through the catalog, exactly as nativeUsePlacements resolves
+				// every host it offers, so the default is byte-identical to the
+				// entry it has to match. Repo.ClusterHost names the same cluster
+				// but is a second derivation of it, and any drift between the
+				// two (an explicit port in the catalog's publicUrl, say) would
+				// make the no-terminal branch report that the repo is on no
+				// cluster it is plainly on.
+				nativePrimaryHost string
 			)
 			if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				if repoRef.forge == nativeCloneForge {
@@ -498,6 +507,7 @@ func newRepoRemoteUseCmd() *cobra.Command {
 						return lerr
 					}
 					nativeRepo = repo
+					nativePrimaryHost = clusterHostBySlug(cat)[repo.ClusterSlug.Or("")]
 					placements = nativeUsePlacements(repo, mirrors, cat)
 					return nil
 				}
@@ -515,11 +525,11 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			}
 
 			// The repo's primary cluster, which a run with no terminal repoints
-			// to: a native repo carries its home cluster, and every GitHub
-			// mirror set includes defaultClusterHost.
+			// to: a native repo's own cluster, and defaultClusterHost for a
+			// GitHub repo, which onboarding always places.
 			defaultHost := defaultClusterHost
 			if nativeRepo != nil {
-				defaultHost = strings.TrimSpace(nativeRepo.ClusterHost.Or(""))
+				defaultHost = nativePrimaryHost
 			}
 			chosen, err := selectPlacement(cmd, placements, clusterHost, defaultHost, placementPicker{
 				selector: clusterSelectorFlag,
