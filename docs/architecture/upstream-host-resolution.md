@@ -223,8 +223,11 @@ doesn't exist" and "that context isn't trusted here" are different mistakes.
 Every consumer resolves through `Active`, so the selection is coherent: `auth
 status` reports it and `auth contexts` marks it. `logout` is the one exception:
 it sweeps every stored login (`auth.StoredContexts`), revoking each on its own
-login server with its own bearer, so the override neither narrows it nor fails
-it by naming a context that is gone.
+login server with its own bearer, so an inherited `$ENTIRE_CONTEXT` neither
+narrows it nor fails it by naming a context that is gone. An explicit
+`--context` is refused there instead of ignored: it asks for one identity on a
+command that ends all of them, and honouring the ambient variable the same way
+would make `logout` unrunnable in a shell that exports it.
 
 Two tiers sit underneath, in `clusterdiscovery.selectLoginContext`, and they
 apply only when the identity came from `current_context` (or there is none):
