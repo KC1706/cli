@@ -333,9 +333,13 @@ auto-selection is a cluster rule (git remotes and the cluster-addressed
 `clusterdiscovery.loginTargets.autoSelect` is set only by
 `ResolveContextForCluster`. Whenever several logins are saved, every command
 that acts as one says which on stderr (`Using context 'x'.`,
-`auth.AnnounceContext`, once per process; `git-remote-entire` keeps its own
-auto-select notice). `activity`/`recap` fall back from the cell to the data API
-freely, since both apply that precedence.
+`auth.AnnounceContext` via `auth.ActingContext`, once per process;
+`git-remote-entire` keeps its own auto-select notice) — but not when the user
+named the identity with `--context`/`$ENTIRE_CONTEXT`. Resolve with
+`auth.ActiveContext` instead when the login is only being described rather than
+acted as, and call `auth.SilenceContextNotice` when a command must stay quiet
+for its whole run (`entire agent-help` does). `activity`/`recap` fall back from
+the cell to the data API freely, since both apply that precedence.
 `{owner}`/`{repo}`/`{repo_id}` in the path are filled
 from the current repo's origin remote. It is an escape hatch, so it is absent
 from `agent-help`'s curated listing but stays in `entire help` and agent-help's
