@@ -64,8 +64,7 @@ func TestClient_RevokeSessionCollection_Scope(t *testing.T) {
 			}))
 			defer server.Close()
 
-			c := NewClient("tok").WithAuthSessionsPath("/api/auth/tokens")
-			c.baseURL = server.URL
+			c := NewClientWithBaseURL("tok", server.URL).WithAuthSessionsPath("/api/auth/tokens")
 			if err := tc.call(c, context.Background()); err != nil {
 				t.Fatalf("error = %v", err)
 			}
