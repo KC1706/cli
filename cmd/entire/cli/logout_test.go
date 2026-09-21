@@ -51,6 +51,37 @@ func TestLogoutCmd_RejectsAllContextsFlag(t *testing.T) {
 	}
 }
 
+// --context selects one identity, so on a command that ends all of them it
+// is refused rather than ignored. Driven through the real root command,
+// which is where the persistent flag lives. Process-global env, keyring and
+// context override, so no t.Parallel().
+func TestLogoutCmd_RejectsContextFlag(t *testing.T) {
+	recA, recB := seedTwoContexts(t)
+	t.Chdir(t.TempDir()) // no .entire here: keep the root pre-run off the real repo
+	all, _, err := auth.StoredContexts()
+	if err != nil || len(all) != 2 {
+		t.Fatalf("StoredContexts = %v, %v; want 2 seeded", all, err)
+	}
+	// Restores whatever the override was before parsing sets it.
+	contexts.SetFlagOverrideForTest(t, "")
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"logout", "--context", all[0].Name})
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); !errors.Is(err, errContextFlagOnLogout) {
+		t.Fatalf("Execute() = %v, want the --context refusal", err)
+	}
+	if recA.deleteCLI != 0 || recB.deleteCLI != 0 {
+		t.Errorf("no session should be revoked, got A=%d B=%d", recA.deleteCLI, recB.deleteCLI)
+	}
+	if left, _, err := auth.StoredContexts(); err != nil || len(left) != 2 {
+		t.Fatalf("StoredContexts = %v, %v; want both logins untouched", left, err)
+	}
+}
+
 // makeLogoutContexts returns a fixed context list.
 func makeLogoutContexts(cs ...*contexts.Context) contextsProvider {
 	return func() ([]*contexts.Context, string, error) { return cs, "", nil }
@@ -412,6 +443,89 @@ func TestRunLogout_HangingCoreHitsDeadline(t *testing.T) {
 	}
 }
 
+// Ctrl-C before the sweep reaches a login: nothing is revoked and — the
+// point of the check — nothing is deleted either. Removing locally without
+// revoking would leave live sessions with no local record of them.
+func TestRunLogout_CancelledBeforeSweepRemovesNothing(t *testing.T) {
+	t.Parallel()
+
+	provider := makeLogoutContexts(
+		&contexts.Context{Name: "a", CoreURL: "https://a.auth.entire.io"},
+		&contexts.Context{Name: "b", CoreURL: "https://b.auth.entire.io"},
+		&contexts.Context{Name: "c", CoreURL: "https://c.auth.entire.io"},
+	)
+	revoke := func(context.Context, string, string) error {
+		t.Error("revoke should not run once the sweep is cancelled")
+		return nil
+	}
+	remove := func(name string) error {
+		t.Errorf("removed %q after cancellation", name)
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var out, errOut bytes.Buffer
+	err := runLogout(ctx, &out, &errOut, unitDeps(provider, freshBearer(), revoke, remove))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want it to wrap context.Canceled so main.go re-raises the signal", err)
+	}
+	if !strings.Contains(errOut.String(), "3 saved login(s) still on this machine") {
+		t.Fatalf("stderr = %q, want the count of untouched logins", errOut.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("stdout = %q, want no logged-out claim", out.String())
+	}
+}
+
+// Ctrl-C during a revoke: the login it interrupted keeps its credentials
+// (its session may well be alive), and the sweep does not walk on to the
+// rest.
+func TestRunLogout_CancelMidSweepStopsAndKeepsTheInterruptedLogin(t *testing.T) {
+	t.Parallel()
+
+	const bURL = "https://b.auth.entire.io"
+	provider := makeLogoutContexts(
+		&contexts.Context{Name: "a", CoreURL: "https://a.auth.entire.io"},
+		&contexts.Context{Name: "b", CoreURL: bURL},
+		&contexts.Context{Name: "c", CoreURL: "https://c.auth.entire.io"},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	var revoked []string
+	revoke := func(_ context.Context, coreURL, _ string) error {
+		revoked = append(revoked, coreURL)
+		if coreURL == bURL {
+			cancel() // the user hits Ctrl-C while b's revoke is in flight
+			return context.Canceled
+		}
+		return nil
+	}
+	var removed []string
+	remove := func(name string) error { removed = append(removed, name); return nil }
+
+	var out, errOut bytes.Buffer
+	err := runLogout(ctx, &out, &errOut, unitDeps(provider, freshBearer(), revoke, remove))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want it to wrap context.Canceled", err)
+	}
+	if len(removed) != 1 || removed[0] != "a" {
+		t.Fatalf("removed = %v, want only the login whose revoke completed", removed)
+	}
+	if len(revoked) != 2 {
+		t.Fatalf("revoked = %v, want the sweep to stop after the interrupted login", revoked)
+	}
+	if !strings.Contains(out.String(), "Logged out of 1 saved login(s).") {
+		t.Fatalf("stdout = %q, want only the completed login counted", out.String())
+	}
+	if !strings.Contains(errOut.String(), "2 saved login(s) still on this machine") {
+		t.Fatalf("stderr = %q, want b and c reported as still present", errOut.String())
+	}
+}
+
 func TestRunLogout_RemoveFailureWarnsAndFails(t *testing.T) {
 	t.Parallel()
 
@@ -662,13 +776,16 @@ func TestLogoutCommand_SweepsEveryContext(t *testing.T) {
 		assertNoContextsLeft(t)
 	})
 
-	t.Run("--context override does not narrow the sweep", func(t *testing.T) {
+	// $ENTIRE_CONTEXT is ambient — often exported for a whole shell — so it
+	// is ignored rather than refused the way an explicit --context is
+	// (TestLogoutCmd_RejectsContextFlag).
+	t.Run("$ENTIRE_CONTEXT does not narrow the sweep", func(t *testing.T) {
 		recA, recB := seedTwoContexts(t)
 		all, _, err := auth.StoredContexts()
 		if err != nil || len(all) != 2 {
 			t.Fatalf("StoredContexts = %v, %v; want 2 seeded", all, err)
 		}
-		contexts.SetFlagOverrideForTest(t, all[0].Name)
+		t.Setenv(contexts.EnvContextVar, all[0].Name)
 		execLogout(t)
 		for name, rec := range map[string]*coreRecorder{"A": recA, "B": recB} {
 			if l, c, b := rec.snapshot(); rec.deleteCLI != 1 || l != 0 || c != 0 || b != 0 {

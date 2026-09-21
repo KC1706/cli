@@ -61,12 +61,15 @@ the commands are always runnable in every build.
   home jurisdiction so the slug is discoverable. `logout` sweeps every saved
   login: one `DELETE /api/auth/tokens` per login server ends every CLI session
   there (core tells them apart by `issuer_client_id`), then the login is
-  removed locally. `--context` never narrows it. `--everywhere` sends
-  `?scope=all`, which also ends browser and web sessions. An older server
-  answers 405; bare `logout` then ends only the bearer's own session and
-  `--everywhere` falls back to list + delete-by-id. Each login gets its own
-  deadline (`logoutLoginTimeout`), and only a failed local removal fails the
-  command
+  removed locally. Nothing narrows it: an explicit `--context` is refused
+  (`errContextFlagOnLogout`) rather than ignored, since it reads as a request
+  to end one login, and `$ENTIRE_CONTEXT` is ignored as ambient state.
+  `--everywhere` sends `?scope=all`, which also ends browser and web sessions.
+  An older server answers 405; bare `logout` then ends only the bearer's own
+  session and `--everywhere` falls back to list + delete-by-id. Each login gets
+  its own deadline (`logoutLoginTimeout`); a cancelled context stops the sweep
+  with the unreached logins intact, and a failed local removal or an interrupt
+  fails the command
 - `doctor`: bare runs the scan-and-fix flow, plus `trace`, `logs`, `bundle`
 - `cluster`: the control plane's data-plane cluster catalog — `list` only, since
   clusters are provisioned by Entire rather than by users. It renders `GET
