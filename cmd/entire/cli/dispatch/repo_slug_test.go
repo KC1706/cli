@@ -14,23 +14,25 @@ func TestNormalizeRepoSlugs(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		{name: "bare is github", in: []string{"entireio/cli"}, want: "gh/entireio/cli"},
-		{name: "github prefix kept", in: []string{"gh/entireio/cli"}, want: "gh/entireio/cli"},
-		{name: "native prefix kept", in: []string{"et/myproject/service"}, want: "et/myproject/service"},
+		{name: "github prefix", in: []string{"gh/entireio/cli"}, want: "gh/entireio/cli"},
+		{name: "native prefix", in: []string{"et/myproject/service"}, want: "et/myproject/service"},
 		{name: "whitespace trimmed", in: []string{"  gh/entireio/cli "}, want: "gh/entireio/cli"},
-		{name: "punctuation in repo", in: []string{"entireio/entire.io"}, want: "gh/entireio/entire.io"},
-		{name: "dedupes across spellings", in: []string{"entireio/cli", "gh/entireio/cli", "et/entireio/cli"}, want: "gh/entireio/cli,et/entireio/cli"},
-		{name: "dedupes case variants, first wins", in: []string{"entireio/cli", "ENTIREIO/CLI", "gh/EntireIO/cli"}, want: "gh/entireio/cli"},
-		{name: "keeps order", in: []string{"c/d", "a/b"}, want: "gh/c/d,gh/a/b"},
+		{name: "punctuation in repo", in: []string{"gh/entireio/entire.io"}, want: "gh/entireio/entire.io"},
+		{name: "same name on both forges is two repos", in: []string{"gh/entireio/cli", "et/entireio/cli"}, want: "gh/entireio/cli,et/entireio/cli"},
+		{name: "dedupes case variants, first wins", in: []string{"gh/entireio/cli", "gh/ENTIREIO/CLI", "gh/EntireIO/cli"}, want: "gh/entireio/cli"},
+		{name: "keeps order", in: []string{"gh/c/d", "et/a/b"}, want: "gh/c/d,et/a/b"},
 		{name: "empty", in: nil, want: ""},
-		{name: "missing slash", in: []string{"entireio"}, wantErr: `invalid repo "entireio"`},
-		{name: "unknown forge", in: []string{"gl/entireio/cli"}, wantErr: `invalid repo "gl/entireio/cli"`},
-		{name: "uppercase forge", in: []string{"GH/entireio/cli"}, wantErr: `invalid repo "GH/entireio/cli"`},
-		{name: "too many segments", in: []string{"gh/entireio/cli/issues"}, wantErr: `invalid repo "gh/entireio/cli/issues"`},
-		{name: "traversal", in: []string{"../../etc/passwd"}, wantErr: `invalid repo "../../etc/passwd"`},
-		{name: "empty owner", in: []string{"gh//cli"}, wantErr: `invalid repo "gh//cli"`},
-		{name: "empty repo", in: []string{"gh/entireio/"}, wantErr: `invalid repo "gh/entireio/"`},
-		{name: "second bad after good", in: []string{"a/b", "nope"}, wantErr: `invalid repo "nope"`},
+		{name: "bare names no forge", in: []string{"entireio/cli"}, wantErr: `invalid repo "entireio/cli": a repo must name its forge — did you mean gh/entireio/cli or et/entireio/cli?`},
+		{name: "bare with whitespace", in: []string{" entireio/cli "}, wantErr: `did you mean gh/entireio/cli or et/entireio/cli?`},
+		{name: "bare owner named like a forge", in: []string{"gh/cli"}, wantErr: `did you mean gh/gh/cli or et/gh/cli?`},
+		{name: "missing slash", in: []string{"entireio"}, wantErr: `invalid repo "entireio": expected gh/<owner>/<repo> or et/<project>/<repo>`},
+		{name: "unknown forge", in: []string{"gl/entireio/cli"}, wantErr: `invalid repo "gl/entireio/cli": expected`},
+		{name: "uppercase forge", in: []string{"GH/entireio/cli"}, wantErr: `invalid repo "GH/entireio/cli": expected`},
+		{name: "too many segments", in: []string{"gh/entireio/cli/issues"}, wantErr: `invalid repo "gh/entireio/cli/issues": expected`},
+		{name: "traversal", in: []string{"../../etc/passwd"}, wantErr: `invalid repo "../../etc/passwd": expected`},
+		{name: "empty owner", in: []string{"gh//cli"}, wantErr: `invalid repo "gh//cli": expected`},
+		{name: "empty repo", in: []string{"gh/entireio/"}, wantErr: `invalid repo "gh/entireio/": expected`},
+		{name: "second bad after good", in: []string{"gh/a/b", "nope"}, wantErr: `invalid repo "nope"`},
 	}
 
 	for _, tt := range tests {
@@ -41,9 +43,6 @@ func TestNormalizeRepoSlugs(t *testing.T) {
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("normalizeRepoSlugs(%q) err = %v, want %q", tt.in, err, tt.wantErr)
-				}
-				if !strings.HasSuffix(err.Error(), "expected owner/repo, gh/owner/repo, or et/owner/repo") {
-					t.Fatalf("error must list the accepted forms, got %q", err.Error())
 				}
 				return
 			}
@@ -65,9 +64,10 @@ func TestGitHubRepoName(t *testing.T) {
 		want   string
 		wantOK bool
 	}{
-		{slug: "entireio/cli", want: "entireio/cli", wantOK: true},
 		{slug: "gh/entireio/cli", want: "entireio/cli", wantOK: true},
 		{slug: " gh/entireio/cli ", want: "entireio/cli", wantOK: true},
+		// A bare name is never assumed to be GitHub.
+		{slug: "entireio/cli"},
 		{slug: "et/myproject/service"},
 		{slug: "gl/entireio/cli"},
 		{slug: "entireio"},
@@ -87,30 +87,34 @@ func TestGitHubRepoName(t *testing.T) {
 	}
 }
 
-func TestRepoSlugsEqual(t *testing.T) {
+func TestEchoedSlugMatches(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		a, b string
-		want bool
+		echoed, requested string
+		want              bool
 	}{
-		{a: "gh/entireio/cli", b: "entireio/cli", want: true},
-		{a: "entireio/cli", b: "gh/entireio/cli", want: true},
-		{a: "gh/EntireIO/CLI", b: "entireio/cli", want: true},
-		{a: "et/entireio/cli", b: "et/entireio/cli", want: true},
-		{a: "et/entireio/cli", b: "entireio/cli", want: false},
-		{a: "et/entireio/cli", b: "gh/entireio/cli", want: false},
-		{a: "gh/entireio/cli", b: "gh/entireio/cli2", want: false},
-		{a: "not a slug", b: "gh/entireio/cli", want: false},
-		{a: "gh/entireio/cli", b: "", want: false},
+		{echoed: "gh/entireio/cli", requested: "gh/entireio/cli", want: true},
+		{echoed: "gh/EntireIO/CLI", requested: "gh/entireio/cli", want: true},
+		{echoed: "et/entireio/cli", requested: "et/entireio/cli", want: true},
+		// The gateway's legacy bare spelling means GitHub.
+		{echoed: "entireio/cli", requested: "gh/entireio/cli", want: true},
+		{echoed: "entireio/cli", requested: "et/entireio/cli", want: false},
+		{echoed: "et/entireio/cli", requested: "gh/entireio/cli", want: false},
+		{echoed: "gh/entireio/cli", requested: "gh/entireio/cli2", want: false},
+		{echoed: "not a slug", requested: "gh/entireio/cli", want: false},
+		{echoed: "gh/entireio/cli", requested: "", want: false},
+		// A request is always forge-qualified; a bare one matches nothing.
+		{echoed: "gh/entireio/cli", requested: "entireio/cli", want: false},
+		{echoed: "entireio/cli", requested: "entireio/cli", want: false},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.a+" vs "+tt.b, func(t *testing.T) {
+		t.Run(tt.echoed+" vs "+tt.requested, func(t *testing.T) {
 			t.Parallel()
 
-			if got := repoSlugsEqual(tt.a, tt.b); got != tt.want {
-				t.Fatalf("repoSlugsEqual(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			if got := echoedSlugMatches(tt.echoed, tt.requested); got != tt.want {
+				t.Fatalf("echoedSlugMatches(%q, %q) = %v, want %v", tt.echoed, tt.requested, got, tt.want)
 			}
 		})
 	}

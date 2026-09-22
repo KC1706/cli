@@ -27,17 +27,17 @@ func TestDescribeDispatchRepoNotFound_AppendsPlacementHintAndKeepsType(t *testin
 
 	original := &dispatchpkg.RepoNotFoundError{
 		Jurisdiction: "au",
-		Repos:        []string{"entirehq/ferrata"},
-		Message:      "repository not found: entirehq/ferrata",
+		Repos:        []string{"gh/entirehq/ferrata"},
+		Message:      "repository not found: gh/entirehq/ferrata",
 	}
 	err := describeDispatchRepoNotFound(context.Background(), original)
 	msg := err.Error()
-	if !strings.HasPrefix(msg, "In AU: repository not found: entirehq/ferrata.") {
+	if !strings.HasPrefix(msg, "In AU: repository not found: gh/entirehq/ferrata.") {
 		t.Fatalf("expected the dispatch error to lead, got %q", msg)
 	}
 	// Deduped, ready-only, flag-valid, and never the jurisdiction that just
 	// failed: the processing EU copy, the malformed slug and AU are not offered.
-	if !strings.HasSuffix(msg, "\n  entirehq/ferrata is placed in: us") {
+	if !strings.HasSuffix(msg, "\n  gh/entirehq/ferrata is placed in: us") {
 		t.Fatalf("expected placement hint, got %q", msg)
 	}
 	var notFound *dispatchpkg.RepoNotFoundError
@@ -86,11 +86,11 @@ func TestDescribeDispatchRepoNotFound_NoReadyPlacementElsewhereSaysSo(t *testing
 
 	err := describeDispatchRepoNotFound(context.Background(), &dispatchpkg.RepoNotFoundError{
 		Home:    "us",
-		Repos:   []string{"entirehq/ferrata", "entirehq/plans"},
-		Message: "repository not found: entirehq/ferrata, entirehq/plans",
+		Repos:   []string{"gh/entirehq/ferrata", "gh/entirehq/plans"},
+		Message: "repository not found: gh/entirehq/ferrata, gh/entirehq/plans",
 	})
 	msg := err.Error()
-	if !strings.Contains(msg, "\n  entirehq/plans has no ready placement in another jurisdiction") {
+	if !strings.Contains(msg, "\n  gh/entirehq/plans has no ready placement in another jurisdiction") {
 		t.Fatalf("expected no-placement hint, got %q", msg)
 	}
 	if strings.Contains(msg, "entirehq/ferrata is placed in") || strings.Contains(msg, "entirehq/ferrata has no") {
@@ -101,7 +101,7 @@ func TestDescribeDispatchRepoNotFound_NoReadyPlacementElsewhereSaysSo(t *testing
 func TestDescribeDispatchRepoNotFound_LeavesErrorAloneWithoutHint(t *testing.T) {
 	withFakeCellCore(t, &fakeCellCore{reposErr: errors.New("core down")})
 
-	original := &dispatchpkg.RepoNotFoundError{Jurisdiction: "us", Repos: []string{"a/b"}, Message: "repository not found: a/b"}
+	original := &dispatchpkg.RepoNotFoundError{Jurisdiction: "us", Repos: []string{"gh/a/b"}, Message: "repository not found: gh/a/b"}
 	if err := describeDispatchRepoNotFound(context.Background(), original); !errors.Is(err, original) || err.Error() != original.Error() {
 		t.Fatalf("expected the original error untouched on control-plane failure, got %v", err)
 	}

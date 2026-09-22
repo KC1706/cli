@@ -259,7 +259,7 @@ func parseNotFoundRepos(message string, requested []string) []string {
 	var repos []string
 	for _, repo := range requested {
 		for _, candidate := range named {
-			if repoSlugsEqual(candidate, repo) {
+			if echoedSlugMatches(candidate, repo) {
 				repos = append(repos, repo)
 				break
 			}

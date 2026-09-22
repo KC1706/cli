@@ -13,7 +13,7 @@ func TestResolveOptions_NormalizesScopeValues(t *testing.T) {
 		"7d",
 		"",
 		false,
-		[]string{" entireio/cli ", "", "entireio/cli"},
+		[]string{" gh/entireio/cli ", "", "gh/entireio/cli"},
 		"",
 		"",
 		false,
@@ -38,7 +38,7 @@ func TestResolveOptions_CloudQualifiesAndDedupesForgeSlugs(t *testing.T) {
 		"7d",
 		"",
 		false,
-		[]string{"entireio/cli", "gh/entireio/cli", "et/myproject/service", " et/myproject/service "},
+		[]string{"gh/entireio/cli", " gh/EntireIO/cli ", "et/myproject/service", " et/myproject/service "},
 		"",
 		"",
 		false,
@@ -56,7 +56,7 @@ func TestResolveOptions_CloudCapCountsDedupedSlugs(t *testing.T) {
 	t.Parallel()
 
 	// Five distinct repos spelled six ways stay under the cap.
-	repos := []string{"a/b", "gh/a/b", "c/d", "e/f", "g/h", "i/j"}
+	repos := []string{"gh/a/b", "gh/A/B", "gh/c/d", "gh/e/f", "gh/g/h", "gh/i/j"}
 	opts, err := ResolveOptions(
 		false,
 		"7d",
@@ -84,7 +84,7 @@ func TestResolveOptions_CloudRejectsAllBranches(t *testing.T) {
 		"7d",
 		"",
 		true,
-		[]string{"entireio/cli"},
+		[]string{"gh/entireio/cli"},
 		"",
 		"",
 		false,
@@ -98,7 +98,7 @@ func TestResolveOptions_CloudRejectsAllBranches(t *testing.T) {
 func TestResolveOptions_CloudCapsReposAtFive(t *testing.T) {
 	t.Parallel()
 
-	repos := []string{"a/b", "c/d", "e/f", "g/h", "i/j", "k/l"}
+	repos := []string{"gh/a/b", "gh/c/d", "gh/e/f", "gh/g/h", "gh/i/j", "gh/k/l"}
 	_, err := ResolveOptions(
 		false,
 		"7d",
@@ -148,7 +148,7 @@ func TestResolveOptions_ForwardsInsecureHTTPAuth(t *testing.T) {
 		"7d",
 		"",
 		false,
-		[]string{"entireio/cli"},
+		[]string{"gh/entireio/cli"},
 		"",
 		"",
 		true,
@@ -204,7 +204,7 @@ func TestResolveOptions_CloudRejectsInvalidRepoSlug(t *testing.T) {
 		false,
 		func() (string, error) { return testDefaultBranchName, nil },
 	)
-	if err == nil || !strings.Contains(err.Error(), `invalid repo "../../etc/passwd": expected owner/repo, gh/owner/repo, or et/owner/repo`) {
+	if err == nil || !strings.Contains(err.Error(), `invalid repo "../../etc/passwd": expected gh/<owner>/<repo> or et/<project>/<repo>`) {
 		t.Fatalf("expected repo slug validation error, got %v", err)
 	}
 }
@@ -236,7 +236,7 @@ func TestResolveOptions_JurisdictionNormalizedForCloud(t *testing.T) {
 		"7d",
 		"",
 		false,
-		[]string{"entireio/cli"},
+		[]string{"gh/entireio/cli"},
 		"",
 		"  US ",
 		false,
