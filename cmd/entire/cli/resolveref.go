@@ -275,6 +275,13 @@ func resolveRepoRefResolved(ctx context.Context, c repoRefClient, ref, projectRe
 // which is what a success line echoes: printing the path the user typed beside
 // whatever ULID was resolved reads as success even when the two disagree.
 //
+// That echo is the server's alone. FullName is optional, and the loop matches
+// on RequestedFullName, so a resolution naming a different FullName is still
+// accepted; substituting the composed ref when the field is absent would render
+// the user's own spelling as a canonical path the server never confirmed. With
+// no name to echo, Name stays empty and resolvedRefLabel falls back to
+// `ref (id)`.
+//
 // The server answers unknown and unauthorized alike, so the miss is one error.
 // It wraps errNamedRefNotFound so routing callers classify it as definitive.
 func resolveNativeRepoByPath(ctx context.Context, c repoRefClient, project, repoName string) (resolvedRef, error) {
@@ -293,7 +300,7 @@ func resolveNativeRepoByPath(ctx context.Context, c repoRefClient, project, repo
 			break
 		}
 		if id := strings.TrimSpace(r.RepoId.Or("")); id != "" {
-			return resolvedRef{ID: id, Name: nativeRepoPath(r.FullName.Or(fullName))}, nil
+			return resolvedRef{ID: id, Name: nativeRepoPath(r.FullName.Or(""))}, nil
 		}
 	}
 	return resolvedRef{}, noRepoAtPathErr(project, repoName)

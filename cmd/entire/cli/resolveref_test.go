@@ -376,6 +376,61 @@ func TestResolveRepoRef_NativePathKeepsGitSuffix(t *testing.T) {
 	}
 }
 
+// TestResolveRepoRef_NativePathEchoesOnlyTheServersName pins that the echoed
+// identifier comes from the server's FullName and from nowhere else.
+//
+// The loop matches on RequestedFullName, so a resolution whose FullName names a
+// different repo is still accepted; falling back to the ref this resolver
+// composed would render the user's own spelling as a canonical /et/ path the
+// server never confirmed. Every other fixture writes one name into both fields,
+// so these two are the only cases that can tell the sources apart.
+func TestResolveRepoRef_NativePathEchoesOnlyTheServersName(t *testing.T) {
+	t.Parallel()
+	const ref = "/et/audit1/victim.git"
+
+	// resolutionHandler answers the one POST /repos/resolve a native path ref
+	// makes, with the requested name fixed and the echoed name under test.
+	resolutionHandler := func(fullName coreapi.OptString) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/repos/resolve") {
+				t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			if err := printJSON(w, &coreapi.ResolveReposResponse{Resolutions: []coreapi.RepoResolution{{
+				Provider:          repoProviderEntire,
+				RequestedFullName: "audit1/victim.git",
+				FullName:          fullName,
+				Status:            coreapi.RepoResolutionStatusReady,
+				RepoId:            coreapi.NewOptString(ulidRepoWeb),
+			}}}); err != nil {
+				t.Errorf("encode resolution: %v", err)
+			}
+		}
+	}
+
+	t.Run("a differing server name is the one echoed", func(t *testing.T) {
+		t.Parallel()
+		c, _ := resolveTestClient(t, resolutionHandler(coreapi.NewOptString("audit1/victim")))
+		got, err := resolveRepoRefResolved(context.Background(), c, ref, "")
+		require.NoError(t, err)
+		require.Equal(t, ulidRepoWeb, got.ID)
+		require.Equal(t, "/et/audit1/victim", got.Name, "the label must carry the name the server matched")
+		require.Equal(t, "/et/audit1/victim ("+ulidRepoWeb+")", resolvedRefLabel(ref, got))
+	})
+
+	t.Run("no server name leaves the label to the typed ref", func(t *testing.T) {
+		t.Parallel()
+		c, _ := resolveTestClient(t, resolutionHandler(coreapi.OptString{}))
+		got, err := resolveRepoRefResolved(context.Background(), c, ref, "")
+		require.NoError(t, err)
+		require.Equal(t, ulidRepoWeb, got.ID)
+		require.Empty(t, got.Name, "an unconfirmed name must not be manufactured from the ref")
+		require.Equal(t, ref+" ("+ulidRepoWeb+")", resolvedRefLabel(ref, got),
+			"the user's spelling is reported as the user's, not as a canonical path")
+	})
+}
+
 func TestResolveRepoRef_NativePath(t *testing.T) {
 	t.Parallel()
 	t.Run("native /et/ path resolves in one pull-gated call", func(t *testing.T) {
