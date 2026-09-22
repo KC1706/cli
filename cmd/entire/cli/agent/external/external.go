@@ -209,9 +209,13 @@ func (e *Agent) WriteSession(ctx context.Context, session *agent.AgentSession) e
 		return fmt.Errorf("write-session: validate session reference: %w", err)
 	}
 	if needsStoreCheck && session.RepoPath != "" {
+		// Fails closed: a filesystem-shaped reference cannot be checked for
+		// containment without the directory it is supposed to be inside, and
+		// this is the preflight's whole job. A plugin that cannot report its
+		// session directory is told which subprocess failed.
 		sessionDir, dirErr := e.getSessionDir(ctx, session.RepoPath)
 		if dirErr != nil {
-			return fmt.Errorf("write-session: open session store: %w", dirErr)
+			return fmt.Errorf("write-session: get-session-dir: %w", dirErr)
 		}
 		store, storeErr := agent.OpenSessionStoreAt(e, sessionDir)
 		if storeErr != nil {

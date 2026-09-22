@@ -273,16 +273,16 @@ func (s *SessionStore) ValidateExternalWriteRef(ref string) error {
 }
 
 // nameAcrossSymlinks retries Name with the store and the reference both
-// resolved.
-//
-// Used by the external preflight only. The built-in write path (WriteSessionFile,
-// sessionStoreForWrite) compares lexically and needs no retry because there is
-// only one speller: its SessionRef is derived from the same GetSessionDir
-// result the store was opened with. An external plugin is a separate program
-// that reports its directory and returns its reference independently, which is
-// what puts two spellings of one directory in play. It reports false when either cannot be resolved, so the caller
+// resolved. It reports false when either cannot be resolved, so the caller
 // keeps the lexical answer rather than trading a definite refusal for an
 // unknown.
+//
+// Used by the external preflight only. The built-in write path
+// (WriteSessionFile, sessionStoreForWrite) compares lexically and needs no
+// retry because there is only one speller: its SessionRef is derived from the
+// same GetSessionDir result the store was opened with. An external plugin is a
+// separate program that reports its directory and returns its reference
+// independently, which is what puts two spellings of one directory in play.
 func (s *SessionStore) nameAcrossSymlinks(ref string) (string, bool) {
 	realDir, ok := evalSymlinksAllowingMissingLeaf(s.dir)
 	if !ok {
