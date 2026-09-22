@@ -20,6 +20,7 @@ func TestNormalizeRepoSlugs(t *testing.T) {
 		{name: "whitespace trimmed", in: []string{"  gh/entireio/cli "}, want: "gh/entireio/cli"},
 		{name: "punctuation in repo", in: []string{"entireio/entire.io"}, want: "gh/entireio/entire.io"},
 		{name: "dedupes across spellings", in: []string{"entireio/cli", "gh/entireio/cli", "et/entireio/cli"}, want: "gh/entireio/cli,et/entireio/cli"},
+		{name: "dedupes case variants, first wins", in: []string{"entireio/cli", "ENTIREIO/CLI", "gh/EntireIO/cli"}, want: "gh/entireio/cli"},
 		{name: "keeps order", in: []string{"c/d", "a/b"}, want: "gh/c/d,gh/a/b"},
 		{name: "empty", in: nil, want: ""},
 		{name: "missing slash", in: []string{"entireio"}, wantErr: `invalid repo "entireio"`},

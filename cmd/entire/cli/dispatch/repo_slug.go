@@ -52,7 +52,8 @@ func normalizeRepoSlug(value string) (string, error) {
 }
 
 // normalizeRepoSlugs qualifies every slug with its forge and drops
-// duplicates, so "owner/repo" and "gh/owner/repo" count once.
+// duplicates, so "owner/repo", "gh/owner/repo" and "GH-case" spellings
+// count once. Names fold case like repoSlugsEqual; the first spelling wins.
 func normalizeRepoSlugs(values []string) ([]string, error) {
 	normalized := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -61,10 +62,11 @@ func normalizeRepoSlugs(values []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seen[slug]; ok {
+		key := strings.ToLower(slug)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[slug] = struct{}{}
+		seen[key] = struct{}{}
 		normalized = append(normalized, slug)
 	}
 	return normalized, nil
