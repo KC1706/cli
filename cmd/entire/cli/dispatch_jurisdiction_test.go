@@ -46,6 +46,35 @@ func TestDescribeDispatchRepoNotFound_AppendsPlacementHintAndKeepsType(t *testin
 	}
 }
 
+func TestDescribeDispatchRepoNotFound_LooksUpForgeSlugsByGitHubName(t *testing.T) {
+	fake := &fakeCellCore{repos: &coreapi.ListReposOutputBody{Repos: []coreapi.RepoIndexEntry{{
+		FullName:   "entirehq/ferrata",
+		Placements: []coreapi.RepoPlacement{{ID: "p1", Jurisdiction: "us", Status: coreapi.RepoPlacementStatusReady}},
+	}}}}
+	withFakeCellCore(t, fake)
+
+	// A native repo has no row in the GitHub-keyed index: it gets no lookup
+	// and no hint, and the GitHub repo's hint still renders in request spelling.
+	err := describeDispatchRepoNotFound(context.Background(), &dispatchpkg.RepoNotFoundError{
+		Jurisdiction: "au",
+		Repos:        []string{"et/myproject/service", "gh/entirehq/ferrata"},
+		Message:      "repository not found: et/myproject/service, gh/entirehq/ferrata",
+	})
+	msg := err.Error()
+	if !strings.HasSuffix(msg, "\n  gh/entirehq/ferrata is placed in: us") {
+		t.Fatalf("expected placement hint for the gh/ slug, got %q", msg)
+	}
+	if strings.Contains(msg, "et/myproject/service is placed in") || strings.Contains(msg, "et/myproject/service has no") {
+		t.Fatalf("a native repo must not get a placement hint, got %q", msg)
+	}
+	fake.mu.Lock()
+	filter := fake.lastListReposParams.Filter.Or("")
+	fake.mu.Unlock()
+	if filter != "entirehq/ferrata" {
+		t.Fatalf("the index lookup must strip the gh/ prefix, got Filter=%q", filter)
+	}
+}
+
 func TestDescribeDispatchRepoNotFound_NoReadyPlacementElsewhereSaysSo(t *testing.T) {
 	// Home path (no selector): the home jurisdiction is the one that failed,
 	// so a repo READY only at home has nothing else to offer. The fake returns

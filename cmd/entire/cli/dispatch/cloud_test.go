@@ -530,3 +530,20 @@ func TestParseNotFoundRepos(t *testing.T) {
 		t.Fatalf("prose after the colon must not become repo lookups, got %v", got)
 	}
 }
+
+func TestParseNotFoundRepos_MatchesAcrossForgeSpellings(t *testing.T) {
+	t.Parallel()
+
+	requested := []string{"gh/a/b", "gh/c/d", "et/e/f", "et/g/h"}
+	// A gateway may echo bare or prefixed; a bare echo is GitHub, never native.
+	got := parseNotFoundRepos("repository not found: a/b, gh/C/D, et/e/f, g/h", requested)
+	if len(got) != 3 || got[0] != "gh/a/b" || got[1] != "gh/c/d" || got[2] != "et/e/f" {
+		t.Fatalf("expected forge-aware matches in the request's spelling, got %v", got)
+	}
+
+	// Legacy bare requests still match a prefixed echo.
+	got = parseNotFoundRepos("repository not found: gh/a/b", []string{"a/b"})
+	if len(got) != 1 || got[0] != "a/b" {
+		t.Fatalf("expected a bare request to match its prefixed echo, got %v", got)
+	}
+}

@@ -64,7 +64,7 @@ func TestParseDispatchFlags_NormalizesRepoScopeValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(opts.RepoPaths, ","); got != "entireio/cli,otherco/service" {
+	if got := strings.Join(opts.RepoPaths, ","); got != "gh/entireio/cli,gh/otherco/service" {
 		t.Fatalf("expected normalized repo scope, got %q", got)
 	}
 	if opts.Branches != nil {

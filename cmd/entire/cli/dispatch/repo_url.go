@@ -10,9 +10,15 @@ var (
 	githubRepoPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
 )
 
+// githubRepoURL links a GitHub slug, prefixed or bare, to its github.com
+// page. Any other forge, or an unsafe name, gets no link.
 func githubRepoURL(fullName string) string {
-	owner, repoName, ok := strings.Cut(strings.TrimSpace(fullName), "/")
-	if !ok || strings.Contains(repoName, "/") || repoName == "." || repoName == ".." {
+	name, ok := GitHubRepoName(fullName)
+	if !ok {
+		return ""
+	}
+	owner, repoName, _ := strings.Cut(name, "/")
+	if repoName == "." || repoName == ".." {
 		return ""
 	}
 	if !githubOwnerPattern.MatchString(owner) || !githubRepoPattern.MatchString(repoName) {

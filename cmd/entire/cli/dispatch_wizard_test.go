@@ -109,7 +109,8 @@ func TestDispatchWizardState_CloudResolvesSelectedRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected cloud mode to resolve selected repos, got %v", err)
 	}
-	if got := strings.Join(opts.RepoPaths, ","); got != "entireio/cli" {
+	// The picker lists bare GitHub names; resolve qualifies them.
+	if got := strings.Join(opts.RepoPaths, ","); got != "gh/entireio/cli" {
 		t.Fatalf("expected selected repo path to propagate, got %q", got)
 	}
 }
@@ -387,7 +388,7 @@ func TestDispatchWizardState_CloudIgnoresCurrentBranchResolutionError(t *testing
 	if err != nil {
 		t.Fatalf("expected cloud mode to ignore current branch resolution error, got %v", err)
 	}
-	if got := strings.Join(opts.RepoPaths, ","); got != "entireio/cli" {
+	if got := strings.Join(opts.RepoPaths, ","); got != "gh/entireio/cli" {
 		t.Fatalf("expected selected repo path to propagate, got %q", got)
 	}
 }

@@ -22,11 +22,57 @@ func TestResolveOptions_NormalizesScopeValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(opts.RepoPaths) != 1 || opts.RepoPaths[0] != "entireio/cli" {
+	if len(opts.RepoPaths) != 1 || opts.RepoPaths[0] != testRepoSlug {
 		t.Fatalf("unexpected normalized repo paths: %v", opts.RepoPaths)
 	}
 	if opts.Branches != nil {
 		t.Fatalf("cloud mode should not implicitly set branches, got %v", opts.Branches)
+	}
+}
+
+func TestResolveOptions_CloudQualifiesAndDedupesForgeSlugs(t *testing.T) {
+	t.Parallel()
+
+	opts, err := ResolveOptions(
+		false,
+		"7d",
+		"",
+		false,
+		[]string{"entireio/cli", "gh/entireio/cli", "et/myproject/service", " et/myproject/service "},
+		"",
+		"",
+		false,
+		func() (string, error) { return testDefaultBranchName, nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(opts.RepoPaths, ","); got != testRepoSlug+",et/myproject/service" {
+		t.Fatalf("expected forge-qualified, deduped repo paths, got %q", got)
+	}
+}
+
+func TestResolveOptions_CloudCapCountsDedupedSlugs(t *testing.T) {
+	t.Parallel()
+
+	// Five distinct repos spelled six ways stay under the cap.
+	repos := []string{"a/b", "gh/a/b", "c/d", "e/f", "g/h", "i/j"}
+	opts, err := ResolveOptions(
+		false,
+		"7d",
+		"",
+		false,
+		repos,
+		"",
+		"",
+		false,
+		func() (string, error) { return testDefaultBranchName, nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opts.RepoPaths) != CloudRepoLimit {
+		t.Fatalf("expected %d deduped repos, got %v", CloudRepoLimit, opts.RepoPaths)
 	}
 }
 
@@ -158,8 +204,27 @@ func TestResolveOptions_CloudRejectsInvalidRepoSlug(t *testing.T) {
 		false,
 		func() (string, error) { return testDefaultBranchName, nil },
 	)
-	if err == nil || !strings.Contains(err.Error(), `invalid repo "../../etc/passwd": expected owner/repo`) {
+	if err == nil || !strings.Contains(err.Error(), `invalid repo "../../etc/passwd": expected owner/repo, gh/owner/repo, or et/owner/repo`) {
 		t.Fatalf("expected repo slug validation error, got %v", err)
+	}
+}
+
+func TestResolveOptions_CloudRejectsUnknownForge(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResolveOptions(
+		false,
+		"7d",
+		"",
+		false,
+		[]string{"gl/entireio/cli"},
+		"",
+		"",
+		false,
+		func() (string, error) { return testDefaultBranchName, nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), `invalid repo "gl/entireio/cli"`) {
+		t.Fatalf("expected unknown-forge rejection, got %v", err)
 	}
 }
 
