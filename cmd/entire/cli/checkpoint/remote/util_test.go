@@ -81,6 +81,19 @@ func TestFetchURL(t *testing.T) {
 			token:        "secret-token",
 			wantURL:      "https://git.example.com:8443/acme/app.git",
 		},
+		{
+			// The seam, not the helper: FetchURL is one of the five callers
+			// that gate on the token alone, so this fails if the transport
+			// guard moves back out of deriveTokenOriginURL or a new caller
+			// rewrites the URL itself. An entire:// host is an Entire cluster,
+			// and coercing it to HTTPS made it the fetch target with the
+			// token attached. See COR-1892.
+			name:         "token does not coerce entire:// origin to https",
+			originURL:    "entire://aws-us-east-2.entire.io/gh/acme/app",
+			settingsJSON: `{"enabled":true}`,
+			token:        "secret-token",
+			wantURL:      "entire://aws-us-east-2.entire.io/gh/acme/app",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1040,8 +1053,8 @@ func TestDeriveCheckpointURLFromInfo(t *testing.T) {
 	}
 }
 
-// TestDeriveTokenOriginURL_RefusesNonDirectTransports pins that only an ssh or
-// https origin is rewritten into a token-bearing HTTPS URL.
+// TestDeriveTokenOriginURL_RefusesNonGitHostTransports pins that an origin whose
+// host is not the git host is never rewritten into a token-bearing HTTPS URL.
 //
 // This is a credential guard, not URL hygiene: the URL this function returns
 // is one a checkpoint token will be attached to, so a transport the token
@@ -1055,7 +1068,7 @@ func TestDeriveCheckpointURLFromInfo(t *testing.T) {
 // The file:// case would also be refused by the empty-host check further down,
 // so it does not discriminate on its own; the entire:// cases are the ones
 // that fail if the guard is removed.
-func TestDeriveTokenOriginURL_RefusesNonDirectTransports(t *testing.T) {
+func TestDeriveTokenOriginURL_RefusesNonGitHostTransports(t *testing.T) {
 	t.Parallel()
 	for _, rawURL := range []string{
 		"entire://aws-us-east-2.entire.io/et/acme/app",
@@ -1071,9 +1084,14 @@ func TestDeriveTokenOriginURL_RefusesNonDirectTransports(t *testing.T) {
 	}
 }
 
-// TestDeriveTokenOriginURL_RewritesDirectTransports pins that the guard did not
+// TestDeriveTokenOriginURL_RewritesGitHostTransports pins that the guard did not
 // disturb the case the function exists for.
-func TestDeriveTokenOriginURL_RewritesDirectTransports(t *testing.T) {
+//
+// http:// and git:// are here because the guard is an allow-list and they were
+// rewritable before it existed: their host is the git host, so dropping them
+// would have turned checkpoint auth on such a remote into a bare 401 — the
+// token is simply not injected, and no call site on that path warns.
+func TestDeriveTokenOriginURL_RewritesGitHostTransports(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
@@ -1083,6 +1101,8 @@ func TestDeriveTokenOriginURL_RewritesDirectTransports(t *testing.T) {
 		{name: "scp ssh", in: "git@github.com:acme/app.git", want: "https://github.com/acme/app.git"},
 		{name: "https", in: "https://github.com/acme/app.git", want: "https://github.com/acme/app.git"},
 		{name: "https with port", in: "https://ghe.example.com:8443/acme/app.git", want: "https://ghe.example.com:8443/acme/app.git"},
+		{name: "http upgrades to https", in: "http://git.example.com/acme/app.git", want: "https://git.example.com/acme/app.git"},
+		{name: "git upgrades to https", in: "git://git.example.com/acme/app.git", want: "https://git.example.com/acme/app.git"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
