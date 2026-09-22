@@ -392,8 +392,8 @@ func TestRepoCreate_WarnsOnInvalidServerHost(t *testing.T) {
 
 // TestRepoCreate_RejectsGitSuffix pins that the CLI refuses a name it would not
 // be able to address afterwards. The server accepts "web.git" — an interior dot
-// is legal — but every ref parser drops the suffix (see gitDirSuffix), so such
-// a repo would be reachable only by ULID. The check must fire before the
+// is legal — but every ref parser drops the suffix (see mirrorGitDirSuffix), so
+// such a repo would be reachable only by ULID. The check must fire before the
 // request, since the server would happily create it.
 //
 // Not parallel: swaps the package-level activeCoreClient seam.
@@ -402,8 +402,8 @@ func TestRepoCreate_RejectsGitSuffix(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			bodyCh := serveRepoCreate(t)
 			err := execRepoCreateNamed(t, name)
-			require.ErrorContains(t, err, gitDirSuffix)
-			require.ErrorContains(t, err, strings.TrimSuffix(name, gitDirSuffix))
+			require.ErrorContains(t, err, mirrorGitDirSuffix)
+			require.ErrorContains(t, err, strings.TrimSuffix(name, mirrorGitDirSuffix))
 			select {
 			case raw := <-bodyCh:
 				t.Fatalf("no create request expected, got body %s", raw)

@@ -331,7 +331,7 @@ func TestResolveRepoRef_NativePath(t *testing.T) {
 	t.Parallel()
 	t.Run("native /et/ path resolves in one pull-gated call", func(t *testing.T) {
 		t.Parallel()
-		for _, ref := range []string{"/et/widgets/web", "et/widgets/web", "/et/widgets/web.git"} {
+		for _, ref := range []string{"/et/widgets/web", "et/widgets/web"} {
 			t.Run(ref, func(t *testing.T) {
 				t.Parallel()
 				var gotFullName string
@@ -366,6 +366,21 @@ func TestResolveRepoRef_NativePath(t *testing.T) {
 		_, err := resolveRepoRef(context.Background(), c, "/et/widgets/web", "")
 		require.ErrorIs(t, err, errNamedRefNotFound)
 		require.EqualError(t, err, "repo /et/widgets/web not found or not shared with you")
+	})
+
+	t.Run("a native path keeps a .git suffix as part of the repo name", func(t *testing.T) {
+		t.Parallel()
+		var gotRepoName string
+		c, _ := resolveTestClient(t, nativePathHandler(t, &gotRepoName))
+		// The handler answers any name with the "web" row; what matters is the
+		// name the server was ASKED for. Before COR-1892 this sent "web", so a
+		// repo named web.git resolved to a different repo's ULID.
+		if _, err := resolveRepoRef(context.Background(), c, "/et/widgets/web.git", ""); err != nil {
+			t.Fatalf("resolveRepoRef: %v", err)
+		}
+		if gotRepoName != "web.git" {
+			t.Errorf("server received repo name=%q, want %q", gotRepoName, "web.git")
+		}
 	})
 
 	t.Run("--project agreeing with the path is allowed", func(t *testing.T) {
@@ -514,7 +529,7 @@ func TestResolveRepoPath(t *testing.T) {
 
 	t.Run("a native path resolves in one call", func(t *testing.T) {
 		t.Parallel()
-		for _, ref := range []string{"/et/widgets/web", "et/widgets/web", "/et/widgets/web.git"} {
+		for _, ref := range []string{"/et/widgets/web", "et/widgets/web"} {
 			t.Run(ref, func(t *testing.T) {
 				t.Parallel()
 				var gotFullName string
@@ -526,6 +541,15 @@ func TestResolveRepoPath(t *testing.T) {
 				require.EqualValues(t, 1, calls.Load(), "repos/resolve")
 			})
 		}
+	})
+
+	t.Run("a native path keeps a .git suffix", func(t *testing.T) {
+		t.Parallel()
+		var gotRepoName string
+		c, _ := resolveTestClient(t, nativePathHandler(t, &gotRepoName))
+		_, err := resolveRepoPath(context.Background(), c, "/et/widgets/web.git")
+		require.NoError(t, err)
+		require.Equal(t, "web.git", gotRepoName)
 	})
 
 	t.Run("a ULID-shaped segment is still a name", func(t *testing.T) {

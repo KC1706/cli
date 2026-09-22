@@ -404,7 +404,7 @@ func parseExpertsRepo(value string) (string, error) {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", fmt.Errorf("invalid --repo %q (use owner/repo)", value)
 	}
-	return parts[0] + "/" + strings.TrimSuffix(parts[1], gitDirSuffix), nil
+	return parts[0] + "/" + strings.TrimSuffix(parts[1], mirrorGitDirSuffix), nil
 }
 
 func expertsAPIPath(repoID string) string {

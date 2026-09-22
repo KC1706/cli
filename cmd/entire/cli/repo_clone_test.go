@@ -30,8 +30,8 @@ func TestParseMirrorCloneRef(t *testing.T) {
 		{name: "missing repo", ref: "/gh/entirehq", wantErr: true},
 		{name: "extra segment", ref: "/gh/entirehq/entire-api/extra", wantErr: true},
 		{name: "dot-only repo", ref: "/gh/entirehq/..", wantErr: true},
-		// Same policy as the native side (see gitDirSuffix): GitHub cannot hold
-		// a name ending in .git, so the suffix is only ever decoration.
+		// GitHub cannot hold a name ending in .git, so here the suffix is only
+		// ever decoration. Contrast the native table below.
 		{name: "git suffix is dropped", ref: "/gh/entirehq/entire-api.git", wantOwner: "entirehq", wantRepo: "entire-api"},
 		{name: "git suffix dropped from a dotted name", ref: "/gh/entirehq/trails.el.git", wantOwner: "entirehq", wantRepo: "trails.el"},
 		// `..git` is not dot-only as typed; it becomes so once the suffix goes,
@@ -78,11 +78,13 @@ func TestParseNativeCloneRef(t *testing.T) {
 		{name: "no leading slash", ref: "et/paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
 		{name: "uppercase folds server-side", ref: "/et/Paul/DogBark", wantProject: "Paul", wantRepo: "DogBark"},
 		{name: "dotted repo", ref: "/et/paul/entire-trails.el", wantProject: "paul", wantRepo: "entire-trails.el"},
-		// `.git` is never part of a name on either backend (see gitDirSuffix),
-		// so it is dropped before the name is validated.
-		{name: "git suffix is dropped", ref: "/et/paul/dogbark.git", wantProject: "paul", wantRepo: "dogbark"},
-		{name: "git suffix dropped from a dotted name", ref: "/et/paul/entire-trails.el.git", wantProject: "paul", wantRepo: "entire-trails.el"},
-		{name: "only the last git suffix is dropped", ref: "/et/paul/dogbark.git.git", wantProject: "paul", wantRepo: "dogbark.git"},
+		// `.git` is part of a native repo name: entiredb permits an interior
+		// dot and the data plane resolves /et/ paths verbatim, so a repo can be
+		// named "dogbark.git" and trimming names a different one. Contrast the
+		// /gh/ table above.
+		{name: "git suffix is part of the name", ref: "/et/paul/dogbark.git", wantProject: "paul", wantRepo: "dogbark.git"},
+		{name: "git suffix on a dotted name", ref: "/et/paul/entire-trails.el.git", wantProject: "paul", wantRepo: "entire-trails.el.git"},
+		{name: "a doubled suffix is verbatim too", ref: "/et/paul/dogbark.git.git", wantProject: "paul", wantRepo: "dogbark.git.git"},
 		{name: "single-char repo", ref: "/et/paul/x", wantProject: "paul", wantRepo: "x"},
 		{name: "shortest project", ref: "/et/abc/dogbark", wantProject: "abc", wantRepo: "dogbark"},
 		{name: "longest project", ref: "/et/" + maxProject + "/dogbark", wantProject: maxProject, wantRepo: "dogbark"},
