@@ -144,18 +144,6 @@ and recovery instructions go to stderr.`,
 		},
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Refuse a name Entire could not address once it existed: every ref
-			// parser drops a trailing `.git` (see mirrorGitDirSuffix), so the repo
-			// would be reachable only by ULID. The server would accept it —
-			// an interior dot is legal — which is exactly why the check is here.
-			if name := strings.TrimSpace(args[0]); strings.HasSuffix(name, mirrorGitDirSuffix) {
-				cmd.SilenceUsage = true
-				err := fmt.Errorf("repo name %q must not end in %s: Entire treats that suffix as never part of a name, so the repo could not be addressed by name afterwards", name, mirrorGitDirSuffix)
-				if trimmed := strings.TrimSuffix(name, mirrorGitDirSuffix); trimmed != "" {
-					err = fmt.Errorf("%w (use %q)", err, trimmed)
-				}
-				return err
-			}
 			var format coreapi.CreateRepoInputBodyObjectFormat
 			if objectFormat != "" {
 				parsed, err := parseObjectFormat(objectFormat)

@@ -390,35 +390,24 @@ func TestRepoCreate_WarnsOnInvalidServerHost(t *testing.T) {
 	require.Contains(t, stderr, "evil.com")
 }
 
-// TestRepoCreate_RejectsGitSuffix pins that the CLI refuses a name it would not
-// be able to address afterwards. The server accepts "web.git" — an interior dot
-// is legal — but every ref parser drops the suffix (see mirrorGitDirSuffix), so
-// such a repo would be reachable only by ULID. The check must fire before the
-// request, since the server would happily create it.
+// TestRepoCreate_AllowsGitSuffix pins that the CLI forwards a name ending in
+// .git instead of refusing it. The API and the frontend both accept such a name
+// -- entiredb permits an interior dot -- so the CLI was the only create path
+// that refused, which is COR-1891. The refusal existed because every ref parser
+// dropped the suffix and the repo would have been unaddressable; native refs
+// are verbatim now, so the premise is gone.
 //
 // Not parallel: swaps the package-level activeCoreClient seam.
-func TestRepoCreate_RejectsGitSuffix(t *testing.T) {
+func TestRepoCreate_AllowsGitSuffix(t *testing.T) {
 	for _, name := range []string{"web.git", "trails.el.git"} {
 		t.Run(name, func(t *testing.T) {
 			bodyCh := serveRepoCreate(t)
-			err := execRepoCreateNamed(t, name)
-			require.ErrorContains(t, err, mirrorGitDirSuffix)
-			require.ErrorContains(t, err, strings.TrimSuffix(name, mirrorGitDirSuffix))
-			select {
-			case raw := <-bodyCh:
-				t.Fatalf("no create request expected, got body %s", raw)
-			default:
-			}
+			require.NoError(t, execRepoCreateNamed(t, name))
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(<-bodyCh, &body))
+			require.Equal(t, name, body["name"], "the name must reach the server verbatim")
 		})
 	}
-
-	t.Run("a dotted name that does not end in the suffix is accepted", func(t *testing.T) {
-		bodyCh := serveRepoCreate(t)
-		require.NoError(t, execRepoCreateNamed(t, "trails.el"))
-		var body map[string]any
-		require.NoError(t, json.Unmarshal(<-bodyCh, &body))
-		require.Equal(t, "trails.el", body["name"])
-	})
 }
 
 // TestRepoCreate_HasNoClusterHostFlag pins that a repo's home cluster is not
