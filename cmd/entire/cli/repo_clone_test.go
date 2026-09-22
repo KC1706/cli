@@ -349,10 +349,11 @@ type nativeRepoFixture struct {
 	clustersStatus int
 }
 
-// serveNativeRepo fakes the three-call native resolution chain: project by
-// name, repo by name within the project, then the single-repo GET (the one
-// response that carries clusterHost + path). The mirror listing answers empty,
-// so resolution sees exactly one placement: the home cluster.
+// serveNativeRepo fakes the two-call native resolution chain: POST
+// /repos/resolve, then the single-repo GET (the one response that carries
+// clusterHost + path). No /projects route is served: a native ref must resolve
+// with repo#pull alone. The mirror listing answers empty, so resolution sees
+// exactly one placement: the home cluster.
 func serveNativeRepo(t *testing.T, repo coreapi.Repo) *coreapi.Client {
 	t.Helper()
 	return serveNativeRepoFixture(t, nativeRepoFixture{repo: repo})
@@ -364,14 +365,8 @@ func serveNativeRepoFixture(t *testing.T, fx nativeRepoFixture) *coreapi.Client 
 		w.Header().Set("Content-Type", "application/json")
 		var body any
 		switch r.URL.Path {
-		case "/api/v1/projects":
-			body = &coreapi.ListProjectsOutputBody{Project: coreapi.NewOptProject(coreapi.Project{
-				ID: testProjectULID, Name: "paul", OwnerId: testProjectULID, OwnerType: coreapi.ProjectOwnerTypeOrg,
-			})}
-		case "/api/v1/projects/" + testProjectULID + "/repos":
-			body = &coreapi.ListProjectReposOutputBody{Repo: coreapi.NewOptRepo(coreapi.Repo{
-				ID: testNativeRepoULID, Name: fx.repo.Name, OwningProjectId: testProjectULID,
-			})}
+		case "/api/v1/repos/resolve":
+			body = nativeResolution("paul/"+fx.repo.Name, testNativeRepoULID)
 		case "/api/v1/repos/" + testNativeRepoULID:
 			body = &fx.repo
 		case "/api/v1/repos/" + testNativeRepoULID + "/native-mirrors":
