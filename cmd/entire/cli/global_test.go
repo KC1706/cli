@@ -48,8 +48,8 @@ func TestMain(m *testing.M) {
 	// to index-pack instead of unpack-objects, so the fetched commit lands in
 	// a new packfile that the already-open go-git repository never indexes —
 	// the checkpoint-remote heal then reports "object not found" and silently
-	// keeps the empty orphan. Set process-wide (not per-test) so it also
-	// covers spawned binaries and git hooks. Mirrors the e2e TestMains.
+	// keeps the empty orphan (ENCLI-378). Set process-wide (not per-test) so
+	// it covers spawned binaries and git hooks. Mirrors the e2e TestMains.
 	gitenv.IsolateMain()
 
 	// ENTIRE_TOKEN is isolated by ABSENCE, not by a redirected path, so it is
