@@ -77,7 +77,11 @@ func TestRepoRemoteURL_Native(t *testing.T) {
 		{"invalid host", "example.com@evil.com", "/et/paul/dogbark.git", "", "invalid cluster host"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			client := serveNativeRepo(t, coreapi.Repo{ID: testNativeRepoULID, Name: "dogbark.git", OwningProjectId: testProjectULID, ClusterHost: coreapi.NewOptString(tc.host), Path: coreapi.NewOptString(tc.path)})
+			var queriedFullName string
+			client := serveNativeRepoFixture(t, nativeRepoFixture{
+				repo:            coreapi.Repo{ID: testNativeRepoULID, Name: "dogbark.git", OwningProjectId: testProjectULID, ClusterHost: coreapi.NewOptString(tc.host), Path: coreapi.NewOptString(tc.path)},
+				queriedFullName: &queriedFullName,
+			})
 			prev := activeCoreClient
 			activeCoreClient = func(context.Context) (*coreapi.Client, error) { return client, nil }
 			t.Cleanup(func() { activeCoreClient = prev })
@@ -94,6 +98,10 @@ func TestRepoRemoteURL_Native(t *testing.T) {
 				require.Empty(t, errOut.String())
 			}
 			require.Equal(t, tc.want, out.String())
+			// `.git` is part of a native repo's name: the lookup must be asked
+			// for "dogbark.git", not silently trimmed to "dogbark" before it
+			// ever reaches the request.
+			require.Equal(t, "paul/dogbark.git", queriedFullName)
 		})
 	}
 }

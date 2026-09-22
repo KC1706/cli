@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -349,6 +350,11 @@ type nativeRepoFixture struct {
 	clusters       []coreapi.Cluster
 	mirrorsStatus  int
 	clustersStatus int
+	// queriedFullName, when non-nil, is set to the <project>/<repo> full name
+	// the native path lookup was actually asked to resolve. The response below
+	// is canned, so a test that wants to assert the ref it parsed (not just the
+	// fixture it wired up) reaches the request needs this rather than the reply.
+	queriedFullName *string
 }
 
 // serveNativeRepo fakes the two-call native resolution chain: POST
@@ -368,6 +374,20 @@ func serveNativeRepoFixture(t *testing.T, fx nativeRepoFixture) *coreapi.Client 
 		var body any
 		switch r.URL.Path {
 		case "/api/v1/repos/resolve":
+			if fx.queriedFullName != nil {
+				var in coreapi.ResolveReposInputBody
+				if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+					t.Errorf("decode resolve body: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if len(in.Repositories) != 1 {
+					t.Errorf("resolve body = %+v, want one reference", in.Repositories)
+				}
+				if len(in.Repositories) > 0 {
+					*fx.queriedFullName = in.Repositories[0].FullName
+				}
+			}
 			body = nativeResolution("paul/"+fx.repo.Name, testNativeRepoULID)
 		case "/api/v1/repos/" + testNativeRepoULID:
 			body = &fx.repo

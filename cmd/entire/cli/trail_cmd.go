@@ -2318,7 +2318,8 @@ func resolveTrailPushRemote(ctx context.Context, branch string) (string, error) 
 // parseTrailRepoArg parses an explicit --repo value into the forge/owner/repo
 // triple. It accepts the canonical "forge/owner/repo" form (e.g. gh/acme/app)
 // as well as a full clone URL (https://, git@, or entire://) that gitremote
-// can parse. A trailing ".git" on the repo is stripped.
+// can parse. A trailing ".git" on the repo is stripped for every forge except
+// the native one, where it is part of the name.
 func parseTrailRepoArg(raw string) (forge, owner, repo string, err error) {
 	return parseTrailRepoShape(raw)
 }
