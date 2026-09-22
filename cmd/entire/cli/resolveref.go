@@ -232,8 +232,9 @@ func resolveProjectByName(ctx context.Context, c projectRefClient, name string) 
 	return resolvedRef{ID: project.ID, Name: project.Name}, nil
 }
 
-// resolveRepoRef turns a repo reference into its ULID. A ULID passes through.
-// A native path ref (`/et/<project>/<repo>`, the `path` the API returns and
+// resolveRepoRefResolved turns a repo reference into its ULID, plus the
+// server's name for whatever it resolved to. A ULID passes through. A native
+// path ref (`/et/<project>/<repo>`, the `path` the API returns and
 // `repo clone` accepts) carries its own project scope. A bare name requires a
 // project scope (projectRef, itself a name or ULID) because repo names are
 // unique only within a project. Either way the repo is resolved via the
@@ -381,13 +382,14 @@ func resolveRepoPathRef(ctx context.Context, c repoRefClient, ref, projectRef st
 	return resolved, nil
 }
 
-// resolveRepoPath resolves the one repo spelling `repo grant` accepts, the
-// native /et/<project>/<repo> path. A ULID or a bare name is refused: the path
-// names the repo the way the API and `repo clone` do, and access management
-// should not need a lookup to know which project it is touching. The grammar
-// is parseNativeCloneRef, shared with clone. Both parsed segments are names by
-// construction, so they take the path lookup directly rather than
-// resolveRepoRef, whose ULID passthrough would read a ULID-shaped NAME as an id.
+// resolveRepoPathResolved resolves the one repo spelling `repo grant` accepts,
+// the native /et/<project>/<repo> path. A ULID or a bare name is refused: the
+// path names the repo the way the API and `repo clone` do, and access
+// management should not need a lookup to know which project it is touching.
+// The grammar is parseNativeCloneRef, shared with clone. Both parsed segments
+// are names by construction, so they take the path lookup directly rather than
+// resolveRepoRef, whose ULID passthrough would read a ULID-shaped NAME as an
+// id.
 //
 // A ref that never named the et/ token is answered with the accepted shape and
 // nothing else, before the parser runs: its "not a native ref" reason is the
