@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"testing"
 
@@ -811,4 +812,73 @@ func TestRepoEdit_Visibility(t *testing.T) {
 		require.ErrorContains(t, err, "invalid visibility")
 		require.Empty(t, bodies)
 	})
+}
+
+// TestRepoDelete_GitSuffixTargetsTheNamedRepo is COR-1892's regression test.
+//
+// Two sibling repos, "victim" and "victim.git". Deleting the second used to
+// resolve the first -- every ref parser dropped the suffix before the lookup
+// -- and the confirmation printed the path the user typed beside the OTHER
+// repo's ULID, so it read as success while the wrong repo was gone.
+//
+// Asserts all three links: the server is asked for "victim.git", the ULID
+// deleted is victim.git's, and the confirmation names what was resolved.
+//
+// Not parallel: swaps the package-level activeCoreClient seam (via runCoreCmd).
+func TestRepoDelete_GitSuffixTargetsTheNamedRepo(t *testing.T) {
+	const (
+		victimID    = "01M3427KZ83C8662KJ1DC2ADP8"
+		victimGitID = "01M3427PK3T21NMN3N7Q1EHBG1"
+	)
+	var askedName, deletedID string
+
+	// Serve the three lookups a /et/audit1/victim.git ref makes: the project by
+	// name, the repo by name, then the delete. The repos endpoint answers by
+	// name, so a request for "victim" would return the WRONG id -- which is
+	// exactly the bug, and why the asked-for name is recorded rather than
+	// assumed.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/repos"):
+			askedName = r.URL.Query().Get("name")
+			id, name := victimID, "victim"
+			if askedName == "victim.git" {
+				id, name = victimGitID, "victim.git"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := printJSON(w, &coreapi.ListProjectReposOutputBody{
+				Repo: coreapi.NewOptRepo(coreapi.Repo{
+					ID: id, Name: name,
+					Path: coreapi.NewOptString("/et/audit1/" + name),
+				}),
+			}); err != nil {
+				t.Errorf("encode repo: %v", err)
+			}
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/projects"):
+			w.Header().Set("Content-Type", "application/json")
+			if err := printJSON(w, &coreapi.ListProjectsOutputBody{
+				Project: coreapi.NewOptProject(coreapi.Project{
+					ID: ulidProjectWidgets, Name: "audit1",
+					OwnerId: ulidOrgAcme, OwnerType: coreapi.ProjectOwnerTypeOrg,
+				}),
+			}); err != nil {
+				t.Errorf("encode project: %v", err)
+			}
+		case r.Method == http.MethodDelete:
+			deletedID = path.Base(r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	stdout, _, err := runCoreCmd(t, newRepoDeleteCmd, srv.URL, "/et/audit1/victim.git", "--force")
+	require.NoError(t, err)
+
+	require.Equal(t, "victim.git", askedName, "the server must be asked for the name the user typed")
+	require.Equal(t, victimGitID, deletedID, "the ULID deleted must be victim.git's, not victim's")
+	require.Contains(t, stdout, "/et/audit1/victim.git")
+	require.Contains(t, stdout, victimGitID)
+	require.NotContains(t, stdout, victimID, "the surviving repo's ULID must not appear")
 }
