@@ -458,11 +458,14 @@ func TestRun_StampsImporterGitAuthorOnCheckpointCommit(t *testing.T) {
 // already applies elsewhere, rather than an empty one.
 func TestRun_UnconfiguredGitIdentityFallsBackToDefaults(t *testing.T) {
 	// Cannot use t.Parallel(): isolates git config resolution via t.Setenv so
-	// this repo can't see any real identity. GetGitAuthorFromRepo resolves
-	// GlobalScope through go-git's Auto loader, which reads all of git's global
-	// sources; neutralize every one or the fallback assertion is flaky wherever
-	// an identity is configured (~/.gitconfig, XDG, GIT_CONFIG_GLOBAL, or system
-	// /etc/gitconfig). Mirrors the checkpoint package's pointHomeAt helper.
+	// this repo can't see any real identity. The package TestMain already
+	// installs an empty ConfigLoader, so GlobalScope carries no identity; this
+	// keeps the env-level isolation as well, because it is what makes the
+	// assertion hold under go-git's Auto loader too — that one reads all of
+	// git's global sources (~/.gitconfig, XDG, GIT_CONFIG_GLOBAL, system
+	// /etc/gitconfig), so a test moved onto it stays correct rather than
+	// silently picking up the developer's identity. Mirrors the checkpoint
+	// package's pointHomeAt helper.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
