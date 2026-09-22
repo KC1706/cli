@@ -359,6 +359,23 @@ func nativePathHandler(t *testing.T, gotFullName *string) http.HandlerFunc {
 	}
 }
 
+// TestResolveRepoRef_NativePathKeepsGitSuffix pins that a native ref carries a
+// trailing `.git` into the lookup. The handler answers any name with the "web"
+// row; what matters is the name the server was asked for. Trimming the suffix
+// asked for "widgets/web", so a repo named web.git resolved to a different
+// repo's ULID.
+func TestResolveRepoRef_NativePathKeepsGitSuffix(t *testing.T) {
+	t.Parallel()
+	var gotFullName string
+	c, _ := resolveTestClient(t, nativePathHandler(t, &gotFullName))
+	if _, err := resolveRepoRef(context.Background(), c, "/et/widgets/web.git", ""); err != nil {
+		t.Fatalf("resolveRepoRef: %v", err)
+	}
+	if gotFullName != "widgets/web.git" {
+		t.Errorf("server received fullName=%q, want %q", gotFullName, "widgets/web.git")
+	}
+}
+
 func TestResolveRepoRef_NativePath(t *testing.T) {
 	t.Parallel()
 	t.Run("native /et/ path resolves in one pull-gated call", func(t *testing.T) {
@@ -400,22 +417,6 @@ func TestResolveRepoRef_NativePath(t *testing.T) {
 		require.EqualError(t, err, "repo /et/widgets/web not found or not shared with you")
 	})
 
-	t.Run("a native path keeps a .git suffix as part of the repo name", func(t *testing.T) {
-		t.Parallel()
-		var gotFullName string
-		c, _ := resolveTestClient(t, nativePathHandler(t, &gotFullName))
-		// The handler answers any name with the "web" row; what matters is the
-		// name the server was ASKED for. Before COR-1892 this asked for
-		// "widgets/web", so a repo named web.git resolved to a different
-		// repo's ULID.
-		if _, err := resolveRepoRef(context.Background(), c, "/et/widgets/web.git", ""); err != nil {
-			t.Fatalf("resolveRepoRef: %v", err)
-		}
-		if gotFullName != "widgets/web.git" {
-			t.Errorf("server received fullName=%q, want %q", gotFullName, "widgets/web.git")
-		}
-
-	})
 	t.Run("--project agreeing with the path is allowed", func(t *testing.T) {
 		t.Parallel()
 		// A name compares locally; a ULID costs one GetRepo.
