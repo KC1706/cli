@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -403,19 +402,20 @@ func TestResolveRepoRef_NativePath(t *testing.T) {
 
 	t.Run("a native path keeps a .git suffix as part of the repo name", func(t *testing.T) {
 		t.Parallel()
-		var gotRepoName string
-		c, _ := resolveTestClient(t, nativePathHandler(t, &gotRepoName))
+		var gotFullName string
+		c, _ := resolveTestClient(t, nativePathHandler(t, &gotFullName))
 		// The handler answers any name with the "web" row; what matters is the
-		// name the server was ASKED for. Before COR-1892 this sent "web", so a
-		// repo named web.git resolved to a different repo's ULID.
+		// name the server was ASKED for. Before COR-1892 this asked for
+		// "widgets/web", so a repo named web.git resolved to a different
+		// repo's ULID.
 		if _, err := resolveRepoRef(context.Background(), c, "/et/widgets/web.git", ""); err != nil {
 			t.Fatalf("resolveRepoRef: %v", err)
 		}
-		if gotRepoName != "web.git" {
-			t.Errorf("server received repo name=%q, want %q", gotRepoName, "web.git")
+		if gotFullName != "widgets/web.git" {
+			t.Errorf("server received fullName=%q, want %q", gotFullName, "widgets/web.git")
 		}
-	})
 
+	})
 	t.Run("--project agreeing with the path is allowed", func(t *testing.T) {
 		t.Parallel()
 		// A name compares locally; a ULID costs one GetRepo.
@@ -578,11 +578,11 @@ func TestResolveRepoPath(t *testing.T) {
 
 	t.Run("a native path keeps a .git suffix", func(t *testing.T) {
 		t.Parallel()
-		var gotRepoName string
-		c, _ := resolveTestClient(t, nativePathHandler(t, &gotRepoName))
+		var gotFullName string
+		c, _ := resolveTestClient(t, nativePathHandler(t, &gotFullName))
 		_, err := resolveRepoPath(context.Background(), c, "/et/widgets/web.git")
 		require.NoError(t, err)
-		require.Equal(t, "web.git", gotRepoName)
+		require.Equal(t, "widgets/web.git", gotFullName)
 	})
 
 	t.Run("a ULID-shaped segment is still a name", func(t *testing.T) {
@@ -645,6 +645,58 @@ func TestResolveRepoPath(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestResolveRepoRefResolved_ReportsServerPath pins that the resolved-ref entry
+// point hands back the server's own identifier. The path is preferred over the
+// bare name: "victim.git" alone would not show which project the repo was in.
+func TestResolveRepoRefResolved_ReportsServerPath(t *testing.T) {
+	t.Parallel()
+	var gotFullName string
+	c, _ := resolveTestClient(t, nativePathHandler(t, &gotFullName))
+	got, err := resolveRepoRefResolved(context.Background(), c, "/et/widgets/web", "")
+	require.NoError(t, err)
+	require.Equal(t, ulidRepoWeb, got.ID)
+	require.Equal(t, "/et/widgets/web", got.Name)
+}
+
+// TestResolveRepoRefResolved_FallsBackToName pins the project-scoped lookup,
+// which answers with a repo row rather than a resolution: path is an optional
+// field there, so a response without one still names the repo.
+func TestResolveRepoRefResolved_FallsBackToName(t *testing.T) {
+	t.Parallel()
+	c, _ := resolveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/repos") {
+			t.Errorf("unexpected %s %s: a --project ULID needs only the repo listing", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if err := printJSON(w, &coreapi.ListProjectReposOutputBody{Repo: coreapi.NewOptRepo(coreapi.Repo{
+			ID:   ulidRepoWeb,
+			Name: "web",
+		})}); err != nil {
+			t.Errorf("encode repo: %v", err)
+		}
+	})
+	got, err := resolveRepoRefResolved(context.Background(), c, "web", ulidProjectWidgets)
+	require.NoError(t, err)
+	require.Equal(t, ulidRepoWeb, got.ID)
+	require.Equal(t, "web", got.Name)
+}
+
+// TestResolveRepoRefResolved_ULIDHasNoName pins that a ULID ref costs no extra
+// round trip: no lookup happened, so there is no name to report.
+func TestResolveRepoRefResolved_ULIDHasNoName(t *testing.T) {
+	t.Parallel()
+	c, calls := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("ULID ref must not hit the server")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	got, err := resolveRepoRefResolved(context.Background(), c, ulidRepoWeb, "")
+	require.NoError(t, err)
+	require.Equal(t, ulidRepoWeb, got.ID)
+	require.Empty(t, got.Name)
+	require.EqualValues(t, 0, calls.Load())
 }
 
 func TestResolveAccountRef(t *testing.T) {
@@ -859,27 +911,6 @@ func TestToProjectList(t *testing.T) {
 		t.Parallel()
 		if got := toProjectList(coreapi.OptProject{}); len(got) != 0 {
 			t.Errorf("toProjectList(unset) = %+v, want empty", got)
-		}
-	})
-}
-
-func TestResolvedRefLabel(t *testing.T) {
-	t.Parallel()
-
-	const id = "01J0REPO000000000000000001"
-
-	t.Run("ulid passes through", func(t *testing.T) {
-		t.Parallel()
-		if got := resolvedRefLabel(id, id); got != id {
-			t.Errorf("got %q, want %q", got, id)
-		}
-	})
-
-	t.Run("name includes resolved id", func(t *testing.T) {
-		t.Parallel()
-		want := fmt.Sprintf("acme (%s)", id)
-		if got := resolvedRefLabel("acme", id); got != want {
-			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 }

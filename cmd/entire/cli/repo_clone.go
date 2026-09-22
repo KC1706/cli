@@ -195,11 +195,11 @@ func parseNativeCloneRef(ref string) (project, repo string, err error) {
 // resolveRepoRef: both segments are names, and a ULID-shaped project name
 // must not be read as an id.
 func resolveNativeRepo(ctx context.Context, c repoRefClient, project, repoName string) (*coreapi.Repo, error) {
-	repoID, err := resolveNativeRepoByPath(ctx, c, project, repoName)
+	resolved, err := resolveNativeRepoByPath(ctx, c, project, repoName)
 	if err != nil {
 		return nil, err
 	}
-	repo, err := c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: repoID})
+	repo, err := c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: resolved.ID})
 	if err != nil {
 		return nil, fmt.Errorf("get repo: %w", err)
 	}

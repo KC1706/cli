@@ -375,8 +375,8 @@ func newRepoDeleteCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runControlPlaneDelete(cmd, "repo", args[0],
-				func(ctx context.Context, c *coreapi.Client) (string, error) {
-					return resolveRepoRef(ctx, c, args[0], project)
+				func(ctx context.Context, c *coreapi.Client) (resolvedRef, error) {
+					return resolveRepoRefResolved(ctx, c, args[0], project)
 				},
 				func(ctx context.Context, c *coreapi.Client, id string) error {
 					return c.DeleteRepo(ctx, coreapi.DeleteRepoParams{RepoId: id})
