@@ -65,7 +65,6 @@ type stubTextAgent struct {
 func (s *stubTextAgent) Name() types.AgentName                        { return s.name }
 func (s *stubTextAgent) Type() types.AgentType                        { return s.kind }
 func (s *stubTextAgent) Description() string                          { return "stub" }
-func (s *stubTextAgent) IsPreview() bool                              { return false }
 func (s *stubTextAgent) DetectPresence(context.Context) (bool, error) { return true, nil }
 func (s *stubTextAgent) ProtectedDirs() []string                      { return nil }
 func (s *stubTextAgent) ReadTranscript(string) ([]byte, error)        { return nil, nil }
@@ -1374,9 +1373,9 @@ func TestUnsupportedSummaryProviderError_DegradesWithNoCapableProviders(t *testi
 func TestSummaryCapableProviderNames_MatchesTheBuiltInAgents(t *testing.T) {
 	t.Parallel()
 
-	// opencode and factoryai-droid are deliberately absent: both are registered
-	// agents with no GenerateText, and naming one is the fault this feature reports.
-	want := []string{"claude-code", "codex", "copilot-cli", "cursor", "gemini", "pi"}
+	// factoryai-droid is deliberately absent: it is a registered agent with no
+	// GenerateText, and naming it is the fault this feature reports.
+	want := []string{"claude-code", "codex", "copilot-cli", "cursor", "gemini", "opencode", "pi"}
 	got := summaryCapableProviderNames()
 	if !slices.Equal(got, want) {
 		t.Errorf("summary-capable providers = %v, want %v\n"+
