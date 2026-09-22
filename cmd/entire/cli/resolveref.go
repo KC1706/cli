@@ -281,7 +281,7 @@ func resolveNativeRepoByPath(ctx context.Context, c repoRefClient, project, repo
 }
 
 // resolveRepoPathRef resolves a slash-bearing repo ref: the native
-// `/et/<project>/<repo>` path (leading slash optional, `.git` suffix dropped —
+// `/et/<project>/<repo>` path (leading slash optional, `.git` suffix kept —
 // parseNativeCloneRef owns that grammar). The ref names its own project, so a
 // --project given alongside it is checked for agreement rather than trusted or
 // ignored: a name compares case-insensitively (the server matches lower(name)
@@ -412,7 +412,14 @@ func noProjectNamedErr(name string) error {
 }
 
 func noRepoNamedErr(name string) error {
-	return &namedRefNotFoundError{message: fmt.Sprintf("no repo named %q in that project (run `entire repo list --project <project>` to see names, or pass a ULID)", name)}
+	msg := fmt.Sprintf("no repo named %q in that project (run `entire repo list --project <project>` to see names, or pass a ULID)", name)
+	// The hint is built into the message rather than wrapped around the error:
+	// repository routing classifies a definitive miss through
+	// errNamedRefNotFound, and wrapping would either hide that or duplicate it.
+	if trimmed, had := strings.CutSuffix(name, mirrorGitDirSuffix); had && trimmed != "" {
+		msg += fmt.Sprintf("; %q is part of a native repo name, so if you meant %q, drop the suffix", mirrorGitDirSuffix, trimmed)
+	}
+	return &namedRefNotFoundError{message: msg}
 }
 
 func noRepoAtPathErr(project, repoName string) error {

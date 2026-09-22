@@ -285,6 +285,39 @@ func TestResolveRepoRef(t *testing.T) {
 	})
 }
 
+// TestResolveRepoInProject_GitSuffixMissCarriesHint pins that a miss on a name
+// ending in .git says so, and that the hint did not cost the error its
+// classification -- repository routing distinguishes a definitive lookup miss
+// from a transport failure through errNamedRefNotFound.
+func TestResolveRepoInProject_GitSuffixMissCarriesHint(t *testing.T) {
+	t.Parallel()
+	c, _ := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		if err := printJSON(w, &coreapi.ListProjectReposOutputBody{}); err != nil {
+			t.Errorf("encode empty: %v", err)
+		}
+	})
+	_, err := resolveRepoRef(context.Background(), c, "web.git", ulidProjectWidgets)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errNamedRefNotFound)
+	require.Contains(t, err.Error(), `no repo named "web.git"`)
+	require.Contains(t, err.Error(), "drop the suffix")
+}
+
+// TestResolveRepoInProject_PlainMissHasNoHint pins that the hint is scoped to
+// the case it explains.
+func TestResolveRepoInProject_PlainMissHasNoHint(t *testing.T) {
+	t.Parallel()
+	c, _ := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		if err := printJSON(w, &coreapi.ListProjectReposOutputBody{}); err != nil {
+			t.Errorf("encode empty: %v", err)
+		}
+	})
+	_, err := resolveRepoRef(context.Background(), c, "web", ulidProjectWidgets)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errNamedRefNotFound)
+	require.NotContains(t, err.Error(), "drop the suffix")
+}
+
 // TestResolveRepoRef_NativePath covers the /et/<project>/<repo> path grammar
 // (COR-1632): the path the API returns and `repo clone` accepts resolves in
 // every repo-ref command, --project alongside it is checked for agreement, and
