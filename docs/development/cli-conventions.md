@@ -265,19 +265,25 @@ the commands are always runnable in every build.
   are best-effort without `--cluster`: if either fails (a core that 404s or
   503s the listing, a catalog hiccup), resolution degrades to the home cluster
   instead of failing a clone that has always worked.
-  A trailing `.git` is never part of a repo name, on **either** backend
-  (`gitDirSuffix` documents the mechanics): every ref parser drops it and `repo
-  create` refuses a name ending in it. This is a deliberate client-side
-  narrowing — GitHub rejects such a name outright, but the server accepts a
-  native `foo.git` (interior dot, same rule that makes `entire-trails.el` legal)
-  and strips the suffix for `/gh/` paths only. `gitremote.splitOwnerRepo` trims
-  unconditionally when reading a remote back, so such a repo is unaddressable by
-  name once cloned regardless; dropping it everywhere makes the CLI agree with
-  itself instead of leaving `repo clone` the one path that keeps it. Escape
-  hatches: the repo's ULID, or a full `entire://` URL. Two consequences worth
-  knowing — a `foo.git` created through the API or web UI *aliases* onto `foo`
-  in `resolveRepoRef`, and the durable fix is a server-side rule in
-  `normalizeName`, not this check.
+  A trailing `.git` is decoration on a `/gh/` mirror ref and **part of the name**
+  on a native `/et/` one (`mirrorGitDirSuffix` documents the mechanics). GitHub
+  rejects a repository name ending in `.git` outright, so on a mirror path the
+  suffix can only ever be decoration and dropping it is what lets a pasted
+  `git clone` URL resolve. The server is the opposite case: entiredb permits an
+  interior dot (the same rule that makes `entire-trails.el` legal), `POST
+  /api/v1/repos {"name":"foo.git"}` returns 201, and the data plane resolves
+  `/et/` paths verbatim — so `parseNativeCloneRef` keeps the suffix, `repo
+  create` forwards such a name, and a native lookup asks for `foo.git`. Trimming
+  it there resolved a *different* repository — sibling repos `foo` and `foo.git`
+  both exist, so `repo delete /et/p/foo.git` destroyed the neighbour and printed
+  the path the user typed beside the survivor's ULID, reading as success. Every
+  remaining trim is therefore a `/gh/` grammar, and
+  `gitremote.splitOwnerRepo` skips the trim for `ForgeNative` so a native remote
+  reads back the name it was cloned under. Two consequences worth knowing — a
+  trim can *manufacture* a dot-only segment (`..git` → `.`), which both the
+  `/gh/` grammar and `splitOwnerRepo` refuse; and `resolveRepoRef`'s
+  project-scoped miss names the suffix in its hint rather than stripping it,
+  since a bare name in that position is a name, not a path.
 - The three `grant` subtrees (`org grant`, `project grant`, `repo grant`) are one
   generic builder plus three target descriptions in `grant.go`; a new target is
   a `grantTarget` value, not a fourth copy of the leaves.
