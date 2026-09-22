@@ -10,6 +10,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFetchURL(t *testing.T) {
@@ -1035,6 +1036,59 @@ func TestDeriveCheckpointURLFromInfo(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("deriveCheckpointURLFromInfo(%q) = %q, want %q", tt.pushRemoteURL, got, tt.want)
 			}
+		})
+	}
+}
+
+// TestDeriveTokenOriginURL_RefusesNonDirectTransports pins that only an ssh or
+// https origin is rewritten into a token-bearing HTTPS URL.
+//
+// This is a credential guard, not URL hygiene: the URL this function returns
+// is one a checkpoint token will be attached to, so a transport the token
+// should never reach must not produce one. An entire:// remote names a
+// cluster rather than a git endpoint, and file:// names no host at all.
+//
+// Most callers gate only on the token being set, never on protocol, which is
+// why the guard belongs in the function rather than at each call site.
+// See COR-1892 for the analysis.
+//
+// The file:// case would also be refused by the empty-host check further down,
+// so it does not discriminate on its own; the entire:// cases are the ones
+// that fail if the guard is removed.
+func TestDeriveTokenOriginURL_RefusesNonDirectTransports(t *testing.T) {
+	t.Parallel()
+	for _, rawURL := range []string{
+		"entire://aws-us-east-2.entire.io/et/acme/app",
+		"entire://aws-us-east-2.entire.io/gh/acme/app",
+		"file:///srv/mirrors/app.git",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			t.Parallel()
+			got, ok := deriveTokenOriginURL(rawURL)
+			require.False(t, ok, "a non-direct transport must not be rewritten into a token-bearing URL")
+			require.Empty(t, got)
+		})
+	}
+}
+
+// TestDeriveTokenOriginURL_RewritesDirectTransports pins that the guard did not
+// disturb the case the function exists for.
+func TestDeriveTokenOriginURL_RewritesDirectTransports(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "scp ssh", in: "git@github.com:acme/app.git", want: "https://github.com/acme/app.git"},
+		{name: "https", in: "https://github.com/acme/app.git", want: "https://github.com/acme/app.git"},
+		{name: "https with port", in: "https://ghe.example.com:8443/acme/app.git", want: "https://ghe.example.com:8443/acme/app.git"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := deriveTokenOriginURL(tc.in)
+			require.True(t, ok)
+			require.Equal(t, tc.want, got)
 		})
 	}
 }

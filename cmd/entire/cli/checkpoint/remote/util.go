@@ -870,6 +870,20 @@ func deriveTokenOriginURL(originURL string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	// Only ssh/https origins are rewritable: this function's whole job is
+	// "direct git transport -> the same repo over HTTPS carrying a token", so
+	// a URL on any other transport is not a rewrite target. A remote-helper
+	// scheme like entire:// names a cluster rather than a git endpoint, and
+	// file:// names no host at all; the credential this URL will carry has no
+	// business travelling to either.
+	//
+	// The guard lives here rather than at the call sites because most callers
+	// gate only on the token being set. resolveTargetForTokenAuth checks the
+	// protocol before calling and stays correct with the check duplicated.
+	// See COR-1892 for the analysis.
+	if !isDirectGitTransport(info.Protocol) {
+		return "", false
+	}
 	if info.Host == "" || info.Owner == "" || info.Repo == "" {
 		return "", false
 	}
