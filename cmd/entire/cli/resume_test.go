@@ -1779,3 +1779,45 @@ func TestRestoreResumeSessions_PreservesSafeMultiSessionNoTranscriptFallback(t *
 		t.Fatalf("stdout = %q, want resume command %q", stdout.String(), want)
 	}
 }
+
+// A legacy multi-session checkpoint can carry a session with no ID at all:
+// readCheckpointInfoFromStore appends every entry and guards `!= ""` on the next
+// line. The tamper scan treated that as unsafe, which accused an untouched
+// checkpoint and killed the fallback the scan exists to protect.
+func TestRestoreResumeSessions_EmptyStoredSessionIDIsNotTampering(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
+	cleanupResumeTestRepo(t, repo, tmpDir)
+	ag := &recordingResumeAgent{sessionDir: filepath.Join(tmpDir, "sessions")}
+	t.Cleanup(agent.SnapshotRegistryForTesting())
+	agent.Register(ag.Name(), func() agent.Agent { return ag })
+
+	cpID := id.MustCheckpointID("cbcbcbcbcbcb")
+	createdAt := time.Now()
+	for i := range 2 {
+		writeCommittedResumeCheckpointWithTranscript(t, repo, cpID,
+			fmt.Sprintf("safe-session-%d", i), createdAt.Add(time.Duration(i)*time.Second), ag.Type(), nil)
+	}
+
+	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
+	info, err := readCheckpointInfoFromStore(t.Context(), store, cpID)
+	if err != nil {
+		t.Fatalf("read checkpoint metadata: %v", err)
+	}
+	// One session recorded without an ID, as an older checkpoint has it.
+	info.SessionIDs = append([]string{""}, info.SessionIDs...)
+
+	var stdout, stderr bytes.Buffer
+	restored, err := restoreResumeSessions(t.Context(), &stdout, &stderr, info, false)
+	if err != nil {
+		t.Fatalf("restoreResumeSessions() error = %v, want the fallback to run", err)
+	}
+	if len(restored) != 0 {
+		t.Fatalf("restored sessions = %#v, want none", restored)
+	}
+	if !strings.Contains(stdout.String(), "session log not available") {
+		t.Fatalf("stdout = %q, want the fallback's missing-log message", stdout.String())
+	}
+}

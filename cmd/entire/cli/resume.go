@@ -935,6 +935,15 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	// nothing else.
 	if restoreErr == nil && len(sessions) == 0 {
 		for _, storedSessionID := range metadata.SessionIDs {
+			// An absent ID is an ordinary skip, not evidence of tampering.
+			// readCheckpointInfoFromStore appends every session's ID and guards
+			// `!= ""` on the next line, and fsstore does the same, so an empty
+			// entry is a shape legacy checkpoints actually have. Treating it as
+			// unsafe accused an untouched checkpoint of tampering and killed the
+			// very fallback this scan exists to protect.
+			if storedSessionID == "" {
+				continue
+			}
 			if err := validation.ValidateSessionID(storedSessionID); err != nil {
 				return nil, fmt.Errorf("unsafe checkpoint session ID %q: %w", storedSessionID, err)
 			}
