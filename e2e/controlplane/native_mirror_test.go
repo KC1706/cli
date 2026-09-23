@@ -245,6 +245,9 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 			"one URL per remote: a mirror serves pushes too, so there is no split push target")
 
 		require.NoError(t, os.WriteFile(filepath.Join(clone, "through-the-mirror.txt"), []byte("hello\n"), 0o644))
+		// The harness isolates global git config, and a clone carries no identity.
+		testutil.Git(t, clone, "config", "user.name", "E2E Clone")
+		testutil.Git(t, clone, "config", "user.email", "e2e-clone@test.local")
 		testutil.CommitIfDirty(t, clone, "push through the mirror")
 		out, perr := testutil.GitOutputErr(clone, "push", "origin", "HEAD")
 		require.NoError(t, perr, "pushing through a mirror must work:\n%s", out)
