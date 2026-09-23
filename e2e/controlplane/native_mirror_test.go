@@ -103,6 +103,9 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	home, target := pickClusters(t, dir, repo)
 	t.Logf("repo %s is primary on %s (%s); mirroring to %s (%s)", ref, repo.ClusterSlug, repo.Jurisdiction, target.Slug, target.Jurisdiction)
 
+	// Each phase's own t shadows this one; anything that must outlive a phase
+	// is registered on lifecycle instead.
+	lifecycle := t
 	phase := func(label string, fn func(t *testing.T)) {
 		if t.Failed() {
 			t.Run(label, func(t *testing.T) { t.Skip("an earlier phase failed") })
@@ -157,11 +160,12 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 		stdout, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout,
 			"repo", "mirror", "add", ref, "--cluster", target.Host, "--timeout", nativeMirrorSeedTimeout.String())
 		require.NoError(t, err, "stdout:\n%s\nstderr:\n%s", stdout, stderr)
-		t.Logf("mirror add stdout:\n%s\nstderr:\n%s", stdout, stderr)
-		// Registered right after the create, so it runs BEFORE the repo delete
-		// that was registered earlier (cleanups are LIFO).
-		t.Cleanup(func() {
-			_, _, _ = runEntireWithTimeout(t, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Host)
+		// Registered on the whole test, not this phase: a subtest's cleanups run
+		// when the subtest returns, which removed the mirror before any later
+		// phase could see it. On the parent it runs at the end, BEFORE the repo
+		// delete that was registered earlier (cleanups are LIFO).
+		lifecycle.Cleanup(func() {
+			_, _, _ = runEntireWithTimeout(lifecycle, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Host)
 		})
 		cloneURL = "entire://" + target.Host + ref
 		require.Contains(t, stdout, cloneURL, "a ready mirror prints the URL to clone it from")
@@ -170,9 +174,6 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	phase("get shows the primary and the mirror, each by role", func(t *testing.T) {
 		stdout, _ := mustRunEntire(t, dir, "repo", "mirror", "get", ref, "--json")
 		row := decodeJSON[repoDirJSON](t, stdout)
-		if len(row.Placements) != 2 {
-			t.Log(nativeMirrorListingDiagnostics(t, dir, ref, repo.ID))
-		}
 		require.Len(t, row.Placements, 2)
 		require.Equal(t, "primary", row.Placements[0].Role)
 		byCluster := map[string]placementJSON{}
@@ -284,36 +285,6 @@ func pickClusters(t *testing.T, dir string, repo repoJSON) (home, foreign cluste
 	require.NotEmpty(t, home.Host, "the repo's own cluster %s is in the catalog: %s", repo.ClusterSlug, stdout)
 	require.NotEmpty(t, foreign.Host, "a cluster outside %s to mirror into: %s", repo.Jurisdiction, stdout)
 	return home, foreign
-}
-
-// nativeMirrorListingDiagnostics gathers what a `get` missing the mirror that
-// `add` just saw ready cannot say on its own: the raw native-mirror listing as
-// the server answers it (`entire api` does not follow a 421, so a
-// cross-jurisdiction answer shows up as one), and whether `get` catches up
-// within 30 seconds or keeps missing it. Not the repo record: it carries a
-// commit token, and these logs are public.
-func nativeMirrorListingDiagnostics(t *testing.T, dir, ref, repoID string) string {
-	t.Helper()
-	var b strings.Builder
-	path := "/api/v1/repos/" + repoID + "/native-mirrors"
-	stdout, stderr, err := runEntire(t, dir, "api", "--include", path)
-	fmt.Fprintf(&b, "entire api --include %s (err: %v)\nstdout:\n%s\nstderr:\n%s\n", path, err, stdout, stderr)
-	deadline := time.Now().Add(30 * time.Second)
-	for attempt := 1; ; attempt++ {
-		stdout, stderr, err := runEntire(t, dir, "repo", "mirror", "get", ref, "--json")
-		count := -1
-		if err == nil {
-			var row repoDirJSON
-			if json.Unmarshal([]byte(stdout), &row) == nil {
-				count = len(row.Placements)
-			}
-		}
-		fmt.Fprintf(&b, "get retry %d: %d placement(s), err: %v, stderr: %s\n", attempt, count, err, strings.TrimSpace(stderr))
-		if count == 2 || time.Now().After(deadline) {
-			return b.String()
-		}
-		time.Sleep(5 * time.Second)
-	}
 }
 
 // TestControlPlane_RepoCreateRejectsClusterHost pins that a repo's home cluster
