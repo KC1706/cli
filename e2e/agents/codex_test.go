@@ -178,3 +178,53 @@ func TestCodexStartupSelectionIsExistingModel(t *testing.T) {
 		})
 	}
 }
+
+// Constructed, not captured: Codex only renders the opt-out row while the
+// configured model is still one of its presets. A retired model leaves the
+// upgrade as the only answer.
+const codexMigrationDialogNoOptOutPane = `
+  Meet GPT-6 Sol
+
+  Our latest Sol is more intelligent and more efficient so your usage limits
+  go further.
+
+› Try new model
+
+  enter/esc confirm · ctrl+c quit`
+
+func TestCodexStartupOffersUpgrade(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		pane string
+		want bool
+	}{
+		{"model migration dialog", codexMigrationDialogPane, true},
+		{"model migration dialog without opt-out", codexMigrationDialogNoOptOutPane, true},
+		{"legacy confirm dialog", codexLegacyDialogPane, false},
+		{"composer", codexComposerPane, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := codexStartupOffersUpgrade(tc.pane); got != tc.want {
+				t.Fatalf("codexStartupOffersUpgrade() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A migration dialog with no opt-out row must not read as one that can be
+// answered safely: every answer there changes the model.
+func TestCodexStartupOffersExistingModel_MigrationWithoutOptOut(t *testing.T) {
+	t.Parallel()
+
+	if codexStartupOffersExistingModel(codexMigrationDialogNoOptOutPane) {
+		t.Fatal("codexStartupOffersExistingModel() = true, want false")
+	}
+	if codexStartupSelectionIsExistingModel(codexMigrationDialogNoOptOutPane) {
+		t.Fatal("codexStartupSelectionIsExistingModel() = true, want false")
+	}
+}

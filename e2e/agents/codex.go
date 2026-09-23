@@ -199,11 +199,17 @@ func (c *Codex) ResumeSession(ctx context.Context, dir, home, sessionID string) 
 // this holds for resumed sessions.
 const codexComposerPlaceholder = "Ask Codex to do anything"
 
-// codexExistingModelOption is the model-migration dialog's opt-out. Codex
-// 0.156.x announces a successor for whichever model is configured and selects
-// the upgrade by default, so confirming blind would move the run off the model
-// seeded into config.toml.
-const codexExistingModelOption = "Use existing model"
+// codexUpgradeOption and codexExistingModelOption are the model-migration
+// dialog's two rows. Codex 0.156.x announces a successor for whichever model
+// is configured and selects the upgrade by default, so confirming blind would
+// move the run off the model seeded into config.toml — onto a costlier tier
+// where the successor is not the same tier (gpt-5.6-terra upgrades to
+// gpt-6-sol). The opt-out row is only drawn while the configured model is
+// still one of Codex's presets, so its absence is the retired-model case.
+const (
+	codexUpgradeOption       = "Try new model"
+	codexExistingModelOption = "Use existing model"
+)
 
 // dismissStartupDialogs answers Codex's startup dialogs until the input
 // composer is showing, and reports what it was looking at when it gave up.
@@ -223,7 +229,10 @@ func (c *Codex) dismissStartupDialogs(s *TmuxSession, phase string) error {
 		// Only the migration dialog gets the walk; other first-run dialogs are
 		// answered by their default. Bail rather than confirm blind once
 		// committed to it: Enter on the wrong row takes the upgrade silently.
-		if codexStartupOffersExistingModel(content) {
+		if codexStartupOffersUpgrade(content) {
+			if !codexStartupOffersExistingModel(content) {
+				return fmt.Errorf("codex %s: migration dialog offers no %q row, so every answer changes the model — the configured model is no longer one of Codex's presets; point E2E_CODEX_MODEL at a current one\n%s", phase, codexExistingModelOption, content)
+			}
 			for range 3 {
 				if codexStartupSelectionIsExistingModel(content) {
 					break
@@ -231,7 +240,9 @@ func (c *Codex) dismissStartupDialogs(s *TmuxSession, phase string) error {
 				if err := s.SendKeys("Down"); err != nil {
 					return fmt.Errorf("codex %s dialog: %w", phase, err)
 				}
-				time.Sleep(200 * time.Millisecond)
+				// Read the moved selection, not the pre-keystroke pane: a slow
+				// redraw would otherwise walk past the row being aimed for.
+				s.paneChangedFrom(content, 2*time.Second)
 				content = s.Capture()
 			}
 			if !codexStartupSelectionIsExistingModel(content) {
@@ -239,7 +250,10 @@ func (c *Codex) dismissStartupDialogs(s *TmuxSession, phase string) error {
 			}
 		}
 		_ = s.SendKeys("Enter")
-		time.Sleep(500 * time.Millisecond)
+		// Same reason: WaitFor only requires the pane to change after Send, so
+		// without this a dialog that has not repainted yet reads as unanswered
+		// and collects a second Enter.
+		s.paneChangedFrom(content, 2*time.Second)
 	}
 	return fmt.Errorf("codex %s: input composer (%q) never appeared after answering 5 dialogs\n%s", phase, codexComposerPlaceholder, s.Capture())
 }
@@ -250,8 +264,14 @@ func codexStartupReady(content string) bool {
 	return strings.Contains(content, codexComposerPlaceholder)
 }
 
-// codexStartupOffersExistingModel reports whether the dialog on screen is the
-// model migration, which is the one dialog whose default answer is wrong.
+// codexStartupOffersUpgrade reports whether the dialog on screen is the model
+// migration, the one dialog whose default answer is wrong.
+func codexStartupOffersUpgrade(content string) bool {
+	return strings.Contains(content, codexUpgradeOption)
+}
+
+// codexStartupOffersExistingModel reports whether that dialog can be answered
+// without changing the model.
 func codexStartupOffersExistingModel(content string) bool {
 	return strings.Contains(content, codexExistingModelOption)
 }
