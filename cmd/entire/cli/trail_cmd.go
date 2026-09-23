@@ -651,6 +651,11 @@ func listTrailResources(ctx context.Context, client *api.Client, basePath string
 // trailListPageQuery builds entire-api's cursor-paginated list query. Empty
 // statuses (--status any) omit the filter. Author is intentionally absent: the
 // CLI accepts a login while this API's author filter accepts account ULIDs.
+//
+// Filters ride only the FIRST page on purpose (RFD-026 §8): the opaque cursor
+// carries the active filters, the server restores them on every continuation,
+// and it 400s a continuation whose repeated filters conflict with the
+// cursor's. Later pages are therefore filtered by the cursor, not unfiltered.
 func trailListPageQuery(statusFilters []trail.Status, perPage int, cursor string) string {
 	q := url.Values{}
 	if cursor == "" && len(statusFilters) > 0 {

@@ -665,6 +665,9 @@ func fetchAllTrailReviewComments(ctx context.Context, client *api.Client, trailI
 			return nil, fmt.Errorf("finding pagination repeated cursor %q", nextCursor)
 		}
 		seenCursors[nextCursor] = true
+		// Continuations carry only cursor+per_page: the opaque cursor holds the
+		// active filters (RFD-026 §8), the server restores them each page, and
+		// repeating them is at best redundant (a conflicting respelling is a 400).
 		opts = trailReviewListOptions{Limit: opts.Limit, Cursor: nextCursor}
 	}
 	return all, nil
@@ -681,8 +684,10 @@ func trailReviewSummaryOptions() trailReviewListOptions {
 
 func trailReviewCommentsPath(trailID string, opts trailReviewListOptions) string {
 	q := url.Values{}
-	// A cursor restores the original filters. Only repeat filters the user
-	// explicitly supplied so defaults cannot overwrite the cursor's scope.
+	// A cursor restores the original filters server-side (RFD-026 §8), so
+	// continuations stay filtered without repeating them. Only repeat filters
+	// the user explicitly supplied so defaults cannot overwrite the cursor's
+	// scope.
 	status := opts.Status
 	if status == trailReviewStatusAny {
 		status = ""

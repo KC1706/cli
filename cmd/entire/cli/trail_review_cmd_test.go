@@ -1204,3 +1204,26 @@ func TestTrailReviewSelectedTextFromWorktree_RejectsSymlink(t *testing.T) {
 		t.Fatalf("symlinked file was read: selected=%q fileOK=%v selectedOK=%v", selected, fileOK, selectedOK)
 	}
 }
+
+
+// A continuation carries only cursor+per_page: the opaque cursor holds the
+// active filters (RFD-026 §8) and the server restores them each page. The
+// user's explicit flags still override on the first page and on explicit
+// re-supply (the *Changed fields).
+func TestTrailReviewCommentsPathContinuationOmitsFiltersTheCursorCarries(t *testing.T) {
+	t.Parallel()
+	first := trailReviewCommentsPath("trl_1", trailReviewListOptions{
+		Status: "open", Severity: "high", Freshness: "current", IncludeDismissed: true, Limit: 50,
+	})
+	for _, param := range []string{"status%5Beq%5D=open", "severity%5Beq%5D=high", "stale=current", "include_dismissed=true"} {
+		if !strings.Contains(first, param) {
+			t.Errorf("first page missing %s: %s", param, first)
+		}
+	}
+
+	continuation := trailReviewCommentsPath("trl_1", trailReviewListOptions{Limit: 50, Cursor: "c2"})
+	want := trailReviewListCommentsPath("trl_1") + "?cursor=c2&per_page=50"
+	if continuation != want {
+		t.Fatalf("continuation = %q, want %q (filters ride the cursor)", continuation, want)
+	}
+}

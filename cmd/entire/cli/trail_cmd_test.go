@@ -1184,7 +1184,11 @@ func TestListTrailResourcesStopsWhenAuthorLimitIsSatisfied(t *testing.T) {
 	}
 }
 
-func TestTrailListPageQueryUsesEntireAPIPagination(t *testing.T) {
+// A continuation carries only cursor+per_page: the opaque cursor holds the
+// active filters (RFD-026 §8) and the server restores them each page, so
+// repeating status here would be redundant (and a conflicting respelling is
+// rejected with 400 by cursorFiltersMatch cell-side).
+func TestTrailListPageQueryContinuationOmitsFiltersTheCursorCarries(t *testing.T) {
 	t.Parallel()
 	got := trailListPageQuery([]trail.Status{trail.StatusOpen}, 100, "next page")
 	want := "?cursor=next+page&per_page=100"
