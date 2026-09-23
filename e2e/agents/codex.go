@@ -164,20 +164,9 @@ func (c *Codex) StartSession(ctx context.Context, dir string) (Session, error) {
 	}
 	s.OnClose(cleanup)
 
-	// Dismiss startup dialogs (model upgrade prompts, etc.) until we reach
-	// the input prompt. Similar to Claude's startup dialog handling.
-	for range 5 {
-		content, waitErr := s.WaitFor(c.PromptPattern(), 15*time.Second)
-		if waitErr != nil {
-			_ = s.Close()
-			return nil, fmt.Errorf("waiting for codex prompt: %w", waitErr)
-		}
-		if !strings.Contains(content, "press enter to confirm") &&
-			!strings.Contains(content, "Use ↑/↓ to move") {
-			break
-		}
-		_ = s.SendKeys("Enter")
-		time.Sleep(500 * time.Millisecond)
+	if err := c.dismissStartupDialogs(s, "startup"); err != nil {
+		_ = s.Close()
+		return nil, err
 	}
 
 	return &CodexSession{TmuxSession: s, home: home}, nil
@@ -192,22 +181,93 @@ func (c *Codex) ResumeSession(ctx context.Context, dir, home, sessionID string) 
 		return nil, err
 	}
 
-	// Dismiss any startup prompts until the input prompt appears.
+	if err := c.dismissStartupDialogs(s, "resume"); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+
+	return &CodexSession{TmuxSession: s, home: home}, nil
+}
+
+// codexComposerPlaceholder is what Codex renders in an empty input box. It is
+// the only positive evidence that the session accepts a prompt: the dialogs
+// Codex draws over the composer at startup render PromptPattern's "›" on their
+// selected row too, so a "›" match is not readiness. Typing a prompt into a
+// dialog loses it — the text is swallowed and its trailing Enter answers the
+// dialog — and the test then waits out its timeout on an agent that never saw
+// the work. A session that already has history shows the placeholder too, so
+// this holds for resumed sessions.
+const codexComposerPlaceholder = "Ask Codex to do anything"
+
+// codexExistingModelOption is the model-migration dialog's opt-out. Codex
+// 0.156.x announces a successor for whichever model is configured and selects
+// the upgrade by default, so confirming blind would move the run off the model
+// seeded into config.toml.
+const codexExistingModelOption = "Use existing model"
+
+// dismissStartupDialogs answers Codex's startup dialogs until the input
+// composer is showing, and reports what it was looking at when it gave up.
+// The wording of each dialog is release-dependent, so the loop recognises the
+// composer rather than the dialogs: an unknown dialog is answered by its
+// default, and a screen that never becomes the composer is an error rather
+// than a prompt sent into the dark.
+func (c *Codex) dismissStartupDialogs(s *TmuxSession, phase string) error {
 	for range 5 {
-		content, waitErr := s.WaitFor(c.PromptPattern(), 15*time.Second)
-		if waitErr != nil {
-			_ = s.Close()
-			return nil, fmt.Errorf("waiting for codex resumed prompt: %w", waitErr)
+		content, err := s.WaitFor(c.PromptPattern(), 15*time.Second)
+		if err != nil {
+			return fmt.Errorf("waiting for codex %s prompt: %w", phase, err)
 		}
-		if !strings.Contains(content, "press enter to confirm") &&
-			!strings.Contains(content, "Use ↑/↓ to move") {
-			break
+		if codexStartupReady(content) {
+			return nil
+		}
+		// Only the migration dialog gets the walk; other first-run dialogs are
+		// answered by their default. Bail rather than confirm blind once
+		// committed to it: Enter on the wrong row takes the upgrade silently.
+		if codexStartupOffersExistingModel(content) {
+			for range 3 {
+				if codexStartupSelectionIsExistingModel(content) {
+					break
+				}
+				if err := s.SendKeys("Down"); err != nil {
+					return fmt.Errorf("codex %s dialog: %w", phase, err)
+				}
+				time.Sleep(200 * time.Millisecond)
+				content = s.Capture()
+			}
+			if !codexStartupSelectionIsExistingModel(content) {
+				return fmt.Errorf("codex %s dialog: %q not reachable, wording may have changed\n%s", phase, codexExistingModelOption, content)
+			}
 		}
 		_ = s.SendKeys("Enter")
 		time.Sleep(500 * time.Millisecond)
 	}
+	return fmt.Errorf("codex %s: input composer (%q) never appeared after answering 5 dialogs\n%s", phase, codexComposerPlaceholder, s.Capture())
+}
 
-	return &CodexSession{TmuxSession: s, home: home}, nil
+// codexStartupReady reports whether the pane shows the input composer rather
+// than a dialog drawn over it.
+func codexStartupReady(content string) bool {
+	return strings.Contains(content, codexComposerPlaceholder)
+}
+
+// codexStartupOffersExistingModel reports whether the dialog on screen is the
+// model migration, which is the one dialog whose default answer is wrong.
+func codexStartupOffersExistingModel(content string) bool {
+	return strings.Contains(content, codexExistingModelOption)
+}
+
+// codexStartupSelectionIsExistingModel reports whether the highlighted row is
+// the keep-the-configured-model option. The dialog renders below whatever it
+// covers, so the last "›" line in the pane is its selection; an earlier one
+// belongs to prior content.
+func codexStartupSelectionIsExistingModel(content string) bool {
+	selected := ""
+	for line := range strings.SplitSeq(content, "\n") {
+		if strings.Contains(line, "›") {
+			selected = line
+		}
+	}
+	return strings.Contains(selected, codexExistingModelOption)
 }
 
 func (c *Codex) startTmuxSession(name, dir, home string, args ...string) (*TmuxSession, error) {
@@ -222,7 +282,10 @@ func seedCodexHome(home, projectDir string) error {
 		return err
 	}
 
-	// Write config with trust, feature flag, and pinned model to skip upgrade dialogs.
+	// Write config with trust, feature flag, and the model to run on. Pinning
+	// the model does not suppress upgrade dialogs: Codex announces a successor
+	// for the configured model, so the pin selects which dialog appears rather
+	// than whether one does. dismissStartupDialogs answers it.
 	model := os.Getenv("E2E_CODEX_MODEL")
 	if model == "" {
 		model = "gpt-5.6-terra"
