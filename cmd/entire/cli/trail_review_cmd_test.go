@@ -1205,7 +1205,6 @@ func TestTrailReviewSelectedTextFromWorktree_RejectsSymlink(t *testing.T) {
 	}
 }
 
-
 // A continuation carries only cursor+per_page: the opaque cursor holds the
 // active filters (RFD-026 §8) and the server restores them each page. The
 // user's explicit flags still override on the first page and on explicit
