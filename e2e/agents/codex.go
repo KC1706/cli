@@ -211,6 +211,12 @@ const (
 	codexExistingModelOption = "Use existing model"
 )
 
+// codexDialogRedraw is how long a keystroke sent to a startup dialog gets to
+// show up on the pane. A keystroke with no visible effect is a failure, not
+// something to send again: the pane may simply be behind, and the repeat then
+// lands on whatever dialog has replaced the one being answered.
+const codexDialogRedraw = 2 * time.Second
+
 // dismissStartupDialogs answers Codex's startup dialogs until the input
 // composer is showing, and reports what it was looking at when it gave up.
 // The wording of each dialog is release-dependent, so the loop recognises the
@@ -242,18 +248,30 @@ func (c *Codex) dismissStartupDialogs(s *TmuxSession, phase string) error {
 				}
 				// Read the moved selection, not the pre-keystroke pane: a slow
 				// redraw would otherwise walk past the row being aimed for.
-				s.paneChangedFrom(content, 2*time.Second)
+				// A pane that never moves means the capture below would be the
+				// pre-keystroke screen, so the walk would spend its remaining
+				// steps on a stale reading of where the selection is.
+				if !s.paneChangedFrom(content, codexDialogRedraw) {
+					return fmt.Errorf("codex %s dialog: pane did not react to Down within %s while walking to %q\n%s", phase, codexDialogRedraw, codexExistingModelOption, s.Capture())
+				}
 				content = s.Capture()
 			}
 			if !codexStartupSelectionIsExistingModel(content) {
 				return fmt.Errorf("codex %s dialog: %q not reachable, wording may have changed\n%s", phase, codexExistingModelOption, content)
 			}
 		}
-		_ = s.SendKeys("Enter")
-		// Same reason: WaitFor only requires the pane to change after Send, so
-		// without this a dialog that has not repainted yet reads as unanswered
-		// and collects a second Enter.
-		s.paneChangedFrom(content, 2*time.Second)
+		if err := s.SendKeys("Enter"); err != nil {
+			return fmt.Errorf("codex %s dialog: %w", phase, err)
+		}
+		// Same reason: WaitFor does not require the pane to change during a
+		// startup wait, so a dialog that has not repainted yet reads as
+		// unanswered on the next pass and collects a second Enter — which by
+		// then lands on its successor and takes that dialog's default, the
+		// blind confirmation the walk above exists to avoid. An Enter with no
+		// visible effect is therefore reported, not repeated.
+		if !s.paneChangedFrom(content, codexDialogRedraw) {
+			return fmt.Errorf("codex %s dialog: pane did not react to Enter within %s; answering again could confirm the next dialog blind\n%s", phase, codexDialogRedraw, s.Capture())
+		}
 	}
 	return fmt.Errorf("codex %s: input composer (%q) never appeared after answering 5 dialogs\n%s", phase, codexComposerPlaceholder, s.Capture())
 }
