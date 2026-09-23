@@ -939,6 +939,34 @@ func TestDeleteTrailByNumber(t *testing.T) {
 	})
 }
 
+// TestParseTrailRepoShape_GitSuffixIsForgeAware pins that a bare triple keeps
+// `.git` for a native ref and drops it for a mirror ref. `entire trail` refuses
+// native refs downstream (errTrailsNativeUnsupported), so this is about the
+// parser reporting the name it was given rather than a user-visible unlock.
+func TestParseTrailRepoShape_GitSuffixIsForgeAware(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		raw       string
+		wantForge string
+		wantOwner string
+		wantRepo  string
+	}{
+		{name: "native keeps the suffix", raw: "et/audit1/foo.git", wantForge: "et", wantOwner: "audit1", wantRepo: "foo.git"},
+		{name: "native without a suffix", raw: "et/audit1/foo", wantForge: "et", wantOwner: "audit1", wantRepo: "foo"},
+		{name: "mirror drops the suffix", raw: "gh/acme/app.git", wantForge: "gh", wantOwner: "acme", wantRepo: "app"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			forge, owner, repo, err := parseTrailRepoShape(tc.raw)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantForge, forge)
+			require.Equal(t, tc.wantOwner, owner)
+			require.Equal(t, tc.wantRepo, repo)
+		})
+	}
+}
+
 // Not parallel: uses t.Chdir() to point ResolveRemoteRepo at a fake repo.
 func TestResolveTrailRemote_RejectsUnsupportedForge(t *testing.T) {
 	repoDir := t.TempDir()

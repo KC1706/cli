@@ -2323,7 +2323,8 @@ func resolveTrailPushRemote(ctx context.Context, branch string) (string, error) 
 // parseTrailRepoArg parses an explicit --repo value into the forge/owner/repo
 // triple. It accepts the canonical "forge/owner/repo" form (e.g. gh/acme/app)
 // as well as a full clone URL (https://, git@, or entire://) that gitremote
-// can parse. A trailing ".git" on the repo is stripped.
+// can parse. A trailing ".git" on the repo is stripped for every forge except
+// the native one, where it is part of the name.
 func parseTrailRepoArg(raw string) (forge, owner, repo string, err error) {
 	return parseTrailRepoShape(raw)
 }
@@ -2349,7 +2350,12 @@ func parseTrailRepoShape(raw string) (forge, owner, repo string, err error) {
 		if !gitremote.IsForgePathToken(parts[0]) {
 			return "", "", "", fmt.Errorf("invalid --repo %q: %q is not a supported forge id (use a forge id like \"gh\", or pass a clone URL such as https://github.com/%s/%s)", raw, parts[0], parts[1], parts[2])
 		}
-		return parts[0], parts[1], strings.TrimSuffix(parts[2], gitDirSuffix), nil
+		// `.git` is decoration on a mirror and part of the name on a native
+		// repo, so the trim follows the forge the ref named.
+		if parts[0] == gitremote.ForgeNative {
+			return parts[0], parts[1], parts[2], nil
+		}
+		return parts[0], parts[1], strings.TrimSuffix(parts[2], mirrorGitDirSuffix), nil
 	}
 	info, perr := gitremote.ParseURL(raw)
 	if perr != nil {
