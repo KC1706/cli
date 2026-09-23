@@ -259,6 +259,11 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 		require.Equal(t, "primary", row.Placements[0].Role)
 	})
 
+	// After a failed phase the mirror may still exist, and the server refuses to
+	// delete its primary; the cleanups tear down in the right order instead.
+	if t.Failed() {
+		return
+	}
 	// The server refuses to delete a project with repos or an org with projects.
 	assertDeleted(t, dir, "repo", created.ID)
 	assertDeleted(t, dir, "project", project.ID)
