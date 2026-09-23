@@ -315,6 +315,47 @@ func TestCheckResponse_ErrorWithObjectEnvelope(t *testing.T) {
 	}
 }
 
+func TestCheckResponse_CarriesStableCode(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"problem details", `{"type":"https://entire.io/errors/rate_limited","title":"Too Many Requests","status":429,"detail":"slow down","code":"rate_limited","request_id":"r1"}`, "rate_limited"},
+		{"compact cell error with code", `{"code":"wrong_cell","error":"not the primary"}`, "wrong_cell"},
+		{"legacy nested envelope", `{"error":{"code":"not_found","message":"session not found"}}`, "not_found"},
+		{"no code", `{"error":"insufficient permissions"}`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", jsonContentType)
+				w.WriteHeader(http.StatusTooManyRequests)
+				w.Write([]byte(tc.body)) //nolint:errcheck // test handler
+			}))
+			defer server.Close()
+
+			resp, err := http.Get(server.URL) //nolint:noctx // test helper
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			err = CheckResponse(resp)
+			var httpErr *HTTPError
+			if !errors.As(err, &httpErr) {
+				t.Fatalf("CheckResponse = %v, want *HTTPError", err)
+			}
+			if httpErr.Code != tc.want {
+				t.Errorf("Code = %q, want %q", httpErr.Code, tc.want)
+			}
+		})
+	}
+}
+
 func TestCheckResponse_ErrorWithPlainText(t *testing.T) {
 	t.Parallel()
 
