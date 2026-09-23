@@ -85,7 +85,8 @@ type repoJSON struct {
 // path can lag behind it for a few seconds, either as a repo that is not yet
 // active or as a by-name lookup that does not find the project or repo yet.
 // An /et/ path resolves through repos/resolve, whose miss reads "not found or
-// not shared with you"; the by-name project and repo lookups report their own.
+// not shared with you". The older by-name lookups report their own misses;
+// those are kept here in case a caller passes a bare name.
 func waitForRepoClonable(t *testing.T, dir, ref string) repoJSON {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)

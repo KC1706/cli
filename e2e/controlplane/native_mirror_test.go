@@ -157,16 +157,19 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 
 	var cloneURL string
 	phase("add places a replica and waits for it to be readable", func(t *testing.T) {
-		stdout, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout,
-			"repo", "mirror", "add", ref, "--cluster", target.Host, "--timeout", nativeMirrorSeedTimeout.String())
-		require.NoError(t, err, "stdout:\n%s\nstderr:\n%s", stdout, stderr)
 		// Registered on the whole test, not this phase: a subtest's cleanups run
 		// when the subtest returns, which removed the mirror before any later
 		// phase could see it. On the parent it runs at the end, BEFORE the repo
-		// delete that was registered earlier (cleanups are LIFO).
+		// delete that was registered earlier (cleanups are LIFO). And before the
+		// add, not after: an add that fails client-side may still have created
+		// the placement, and the require below would skip past a later
+		// registration. Removing a placement that does not exist is harmless.
 		lifecycle.Cleanup(func() {
 			_, _, _ = runEntireWithTimeout(lifecycle, dir, nativeMirrorStepTimeout, "repo", "mirror", "remove", ref, "--cluster", target.Host)
 		})
+		stdout, stderr, err := runEntireWithTimeout(t, dir, nativeMirrorStepTimeout,
+			"repo", "mirror", "add", ref, "--cluster", target.Host, "--timeout", nativeMirrorSeedTimeout.String())
+		require.NoError(t, err, "stdout:\n%s\nstderr:\n%s", stdout, stderr)
 		cloneURL = "entire://" + target.Host + ref
 		require.Contains(t, stdout, cloneURL, "a ready mirror prints the URL to clone it from")
 	})
@@ -211,7 +214,7 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 	// ("exists", "registered", "ready", "removed") is what the summary table and
 	// the progress lines both carry, while prose moves whenever the reporting is
 	// reshaped — which is exactly how the previous assertions here rotted
-	// unnoticed, this suite not being part of CI.
+	// unnoticed, this suite not running on PRs.
 	phase("add is idempotent and says so", func(t *testing.T) {
 		stdout, _ := mustRunEntire(t, dir, "repo", "mirror", "add", ref, "--cluster", target.Host, "--no-wait")
 		require.Contains(t, stdout, ref)
@@ -259,15 +262,14 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 		require.Equal(t, "primary", row.Placements[0].Role)
 	})
 
-	// After a failed phase the mirror may still exist, and the server refuses to
-	// delete its primary; the cleanups tear down in the right order instead.
-	if t.Failed() {
-		return
-	}
 	// The server refuses to delete a project with repos or an org with projects.
-	assertDeleted(t, dir, "repo", created.ID)
-	assertDeleted(t, dir, "project", project.ID)
-	assertDeleted(t, dir, "org", org.ID)
+	// After a failed phase the mirror may still exist and the server refuses to
+	// delete its primary, so this skips and the cleanups tear down in order.
+	phase("the three delete in reverse", func(t *testing.T) {
+		assertDeleted(t, dir, "repo", created.ID)
+		assertDeleted(t, dir, "project", project.ID)
+		assertDeleted(t, dir, "org", org.ID)
+	})
 }
 
 // pickClusters returns the repo's own cluster and one outside its region — the
